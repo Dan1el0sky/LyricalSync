@@ -1,0 +1,19 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch
+torchaudio
+fastapi
+uvicorn
+ytmusicapi
+yt-dlp
+requests
+beautifulsoup4
+whisper-timestamped
+demucs
+pydub
+faster-whisper
+numpy
+python-dotenv
+unidecode
+torchcodec
+soundfile
+librosa
