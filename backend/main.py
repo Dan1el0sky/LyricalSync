@@ -11,9 +11,8 @@ from processor import AudioProcessor
 
 app = FastAPI()
 
-# Serve downloads folder so frontend can play audio
-os.makedirs("downloads", exist_ok=True)
-app.mount("/downloads", StaticFiles(directory="downloads"), name="downloads")
+# Serve current directory so frontend can play audio downloads
+app.mount("/downloads", StaticFiles(directory="."), name="downloads")
 
 lf = LyricsFetcher()
 ap = AudioProcessor()
@@ -62,8 +61,7 @@ async def process_song(request: DownloadRequest):
     title = request.title
     artist = request.artist
     url = f"https://music.youtube.com/watch?v={video_id}"
-    output_dir = "downloads"
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = "."
 
     output_path = os.path.join(output_dir, f"{video_id}.mp3")
 

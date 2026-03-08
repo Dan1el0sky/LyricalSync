@@ -135,9 +135,31 @@ class AudioProcessor:
 
         print(f"Processing {audio_path}...")
 
-        waveform, sample_rate = torchaudio.load(audio_path)
-        if waveform.shape[0] > 1:
-            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        # Load audio using pydub instead of torchaudio to completely bypass OS-specific ffmpeg libav link errors
+        from pydub import AudioSegment
+        import numpy as np
+
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            sample_rate = audio.frame_rate
+
+            # Convert to mono
+            if audio.channels > 1:
+                audio = audio.set_channels(1)
+
+            # Convert to raw data
+            samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+
+            # Normalize to [-1.0, 1.0]
+            max_val = np.abs(samples).max()
+            if max_val > 0:
+                samples = samples / max_val
+
+            waveform = torch.from_numpy(samples).unsqueeze(0) # shape: (1, samples)
+
+        except Exception as e:
+            print(f"Error loading audio via pydub: {e}")
+            raise e
 
         final_segments = []
 

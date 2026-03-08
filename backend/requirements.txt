@@ -11,3 +11,7 @@ demucs
 pydub
 faster-whisper
 unidecode
+torchcodec
+soundfile
+librosa
+import numpy as np
