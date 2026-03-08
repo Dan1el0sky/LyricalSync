@@ -14,4 +14,4 @@ unidecode
 torchcodec
 soundfile
 librosa
-import numpy as np
+numpy

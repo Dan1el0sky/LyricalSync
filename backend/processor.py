@@ -1,4 +1,8 @@
 import os
+# Force PyTorch and torchaudio to download the huge 1.18GB models to the local project folder
+# instead of the user's C:\Users\...\.cache\ directory.
+os.environ["TORCH_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
 import torch
 import torchaudio
 import json
