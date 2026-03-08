@@ -23,8 +23,8 @@ class AudioProcessor:
             print(f"Loading torchaudio MMS Forced Alignment model on {self.device}...")
             self.model = self.bundle.get_model()
             self.model.to(self.device)
-            self.labels = self.bundle.get_labels(star=None)
-            self.dictionary = self.bundle.get_dict(star=None)
+            self.labels = self.bundle.get_labels(star="*")
+            self.dictionary = self.bundle.get_dict(star="*")
 
     def compute_alignments(self, emission, transcript, dictionary):
         targets = torch.tensor([dictionary[c] for c in transcript], dtype=torch.int32)
