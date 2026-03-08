@@ -1,0 +1,23 @@
+# Node.js
+node_modules/
+build/
+dist/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+.venv/
+.env
+backend/downloads/
+*.log
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+backend/venv/
+frontend/node_modules/

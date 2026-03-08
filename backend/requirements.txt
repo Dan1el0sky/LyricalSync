@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+ytmusicapi
+yt-dlp
+requests
+beautifulsoup4
+torch
+torchaudio
+whisper-timestamped
+demucs
+pydub
+faster-whisper
