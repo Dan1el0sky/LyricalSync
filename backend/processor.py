@@ -36,7 +36,7 @@ class AudioProcessor:
         text = re.sub(r'[^a-z0-9 ]', '', text)
         return text.strip()
 
-    def _align_words(self, waveform, sample_rate, words):
+    def _align_words(self, waveform, sample_rate, words, offset_time=0.0):
         if sample_rate != self.bundle.sample_rate:
             resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.bundle.sample_rate)
             waveform = resampler(waveform)
@@ -69,16 +69,12 @@ class AudioProcessor:
         if not transcript:
             return []
 
-        # torchaudio forced_align returns (frame_alignments, scores)
-        # However, due to memory on huge sequences (3 min song), forced_align can fail or take huge RAM.
-        # But for 4GB we should be okay for 3-4 minutes.
         try:
             alignments, scores = self.compute_alignments(emission, transcript, self.dictionary)
             alignments = alignments[0]
         except Exception as e:
-            print("Forced alignment failed, returning evenly spaced timings. Error:", e)
-            # Fallback to evenly spaced fake timings
-            return self._fake_align(words, waveform.shape[1]/self.bundle.sample_rate)
+            print("Forced alignment chunk failed, returning evenly spaced timings. Error:", e)
+            return self._fake_align(words, waveform.shape[1]/self.bundle.sample_rate, offset_time)
 
         frame_dur = 1.0 / 50.0
 
@@ -93,8 +89,8 @@ class AudioProcessor:
             for idx in range(span["start_idx"], span["end_idx"]):
                 token_frames = (alignments == idx).nonzero(as_tuple=True)[0]
                 if len(token_frames) > 0:
-                    c_start = token_frames[0].item() * frame_dur
-                    c_end = (token_frames[-1].item() + 1) * frame_dur
+                    c_start = (token_frames[0].item() * frame_dur) + offset_time
+                    c_end = ((token_frames[-1].item() + 1) * frame_dur) + offset_time
                     if start_frame is None: start_frame = c_start
                     end_frame = c_end
 
@@ -114,12 +110,12 @@ class AudioProcessor:
 
         return aligned_words
 
-    def _fake_align(self, words, duration):
+    def _fake_align(self, words, duration, offset_time=0.0):
         total_chars = sum(len(w) for w in words)
         char_dur = duration / total_chars if total_chars > 0 else 0
 
         aligned_words = []
-        current_time = 0.0
+        current_time = offset_time
         for w in words:
             w_start = current_time
             char_timings = []
@@ -168,37 +164,123 @@ class AudioProcessor:
         final_segments = []
 
         if existing_lyrics_text:
-            print("Force aligning existing lyrics exactly using torchaudio MMS_FA...")
-            lines = existing_lyrics_text.split('\n')
-            all_words = []
-            word_to_line = {}
-            word_idx = 0
+            print("Force aligning existing lyrics using torchaudio MMS_FA (chunked to save memory/prevent lag)...")
 
-            for line_idx, line in enumerate(lines):
-                words = line.strip().split()
-                for w in words:
-                    all_words.append(w)
-                    word_to_line[word_idx] = line_idx
-                    word_idx += 1
+            # Total audio duration
+            total_duration = waveform.shape[1] / sample_rate
 
-            aligned_words = self._align_words(waveform, sample_rate, all_words)
+            chunks_to_process = []
 
-            lines_data = {}
-            for i, aw in enumerate(aligned_words):
-                if i >= len(word_to_line): break
-                l_idx = word_to_line[i]
-                if l_idx not in lines_data:
-                    lines_data[l_idx] = {
-                        "text": lines[l_idx],
-                        "start": aw["start"],
-                        "end": aw["end"],
-                        "words": []
-                    }
-                lines_data[l_idx]["words"].append(aw)
-                lines_data[l_idx]["end"] = aw["end"]
+            # Strategy 1: Use exact Musixmatch phrase timings to chunk the audio
+            if richsync_data:
+                print("Richsync data found! Chunking audio exactly by phrase timestamps...")
+                for i, line_data in enumerate(richsync_data):
+                    start_ts = line_data.get("ts", 0.0)
+                    end_ts = line_data.get("te", 0.0)
+                    text = line_data.get("text", "").strip()
+                    if not text: continue
 
-            for l_idx in sorted(lines_data.keys()):
-                final_segments.append(lines_data[l_idx])
+                    # If Musixmatch didn't give an end timestamp for the phrase, guess based on next phrase
+                    if end_ts == 0.0 or end_ts <= start_ts:
+                        if i + 1 < len(richsync_data):
+                            end_ts = richsync_data[i+1].get("ts", start_ts + 5.0)
+                        else:
+                            end_ts = total_duration
+
+                    # Add slight padding so we don't clip words on the absolute edge
+                    pad = 0.5
+                    c_start = max(0.0, start_ts - pad)
+                    c_end = min(total_duration, end_ts + pad)
+
+                    chunks_to_process.append({
+                        "text": text,
+                        "start_sec": c_start,
+                        "end_sec": c_end,
+                        "offset": c_start
+                    })
+
+            # Strategy 2: We only have plain text. Chunk audio blindly into 30s blocks and guess lines.
+            else:
+                print("No richsync found. Slicing audio blindly into 30s blocks...")
+                lines = [l.strip() for l in existing_lyrics_text.split('\n') if l.strip()]
+                chunk_duration_sec = 30.0
+
+                total_words = sum(len(line.split()) for line in lines)
+                words_per_sec = total_words / total_duration if total_duration > 0 else 1
+
+                current_line_idx = 0
+                for start_sec in range(0, int(total_duration), int(chunk_duration_sec)):
+                    end_sec = min(start_sec + chunk_duration_sec, total_duration)
+                    chunk_expected_words = int((end_sec - start_sec) * words_per_sec)
+
+                    chunk_lines = []
+                    chunk_words_count = 0
+
+                    while current_line_idx < len(lines):
+                        line = lines[current_line_idx]
+                        w_count = len(line.split())
+                        if chunk_words_count + w_count > chunk_expected_words * 1.5 and chunk_lines:
+                            break
+                        chunk_lines.append(line)
+                        chunk_words_count += w_count
+                        current_line_idx += 1
+
+                    if chunk_lines:
+                        chunks_to_process.append({
+                            "text": " \n ".join(chunk_lines), # Use newline to keep track later
+                            "start_sec": start_sec,
+                            "end_sec": end_sec,
+                            "offset": start_sec
+                        })
+
+                # Append left overs
+                while current_line_idx < len(lines):
+                    # just slap them on the end
+                    chunks_to_process.append({
+                        "text": lines[current_line_idx],
+                        "start_sec": total_duration - 5.0,
+                        "end_sec": total_duration,
+                        "offset": total_duration - 5.0
+                    })
+                    current_line_idx += 1
+
+
+            # Execute chunked alignments
+            for chunk in chunks_to_process:
+                start_sample = int(chunk["start_sec"] * sample_rate)
+                end_sample = int(chunk["end_sec"] * sample_rate)
+                chunk_waveform = waveform[:, start_sample:end_sample]
+
+                lines_in_chunk = chunk["text"].split(" \n ")
+                all_words = []
+                word_to_line = {}
+                word_idx = 0
+
+                for line_idx, line in enumerate(lines_in_chunk):
+                    words = line.strip().split()
+                    for w in words:
+                        all_words.append(w)
+                        word_to_line[word_idx] = line_idx
+                        word_idx += 1
+
+                aligned_words = self._align_words(chunk_waveform, sample_rate, all_words, offset_time=chunk["offset"])
+
+                lines_data = {}
+                for i, aw in enumerate(aligned_words):
+                    if i >= len(word_to_line): break
+                    l_idx = word_to_line[i]
+                    if l_idx not in lines_data:
+                        lines_data[l_idx] = {
+                            "text": lines_in_chunk[l_idx],
+                            "start": aw["start"],
+                            "end": aw["end"],
+                            "words": []
+                        }
+                    lines_data[l_idx]["words"].append(aw)
+                    lines_data[l_idx]["end"] = aw["end"]
+
+                for l_idx in sorted(lines_data.keys()):
+                    final_segments.append(lines_data[l_idx])
 
         else:
             print("No lyrics provided! Falling back to fast whisper transcription...")
