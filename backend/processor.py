@@ -130,7 +130,9 @@ class AudioProcessor:
             })
         return aligned_words
 
-    def process(self, audio_path, existing_lyrics_text=None, richsync_data=None):
+    def process(self, audio_path, existing_lyrics_text=None, richsync_data=None, video_id=None, progress_store=None):
+        if progress_store and video_id:
+            progress_store[video_id] = {"status": "Loading audio processing model...", "percent": 55}
         self.load_model()
 
         print(f"Processing {audio_path}...")
@@ -164,6 +166,8 @@ class AudioProcessor:
         final_segments = []
 
         if existing_lyrics_text:
+            if progress_store and video_id:
+                progress_store[video_id] = {"status": "Force aligning lyrics...", "percent": 65}
             print("Force aligning existing lyrics using torchaudio MMS_FA (chunked to save memory/prevent lag)...")
 
             # Total audio duration
@@ -199,54 +203,96 @@ class AudioProcessor:
                         "offset": c_start
                     })
 
-            # Strategy 2: We only have plain text. Chunk audio blindly into 30s blocks and guess lines.
+            # Strategy 2: We only have plain text. Use Whisper to find timestamps, then align words exactly.
             else:
-                print("No richsync found. Slicing audio blindly into 30s blocks...")
+                if progress_store and video_id:
+                    progress_store[video_id] = {"status": "Transcribing audio to find safe chunks...", "percent": 75}
+                print("No richsync found. Transcribing audio with Whisper to find safe chunks to align...")
+
+                import whisper_timestamped as whisper
+                w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
+                w_audio = whisper.load_audio(audio_path)
+                results = whisper.transcribe(w_model, w_audio, language="en")
+
+                # Create chunks based on whisper segments
+                chunk_duration_target = 30.0
+                current_chunk_segments = []
+                current_chunk_start = 0.0
+
                 lines = [l.strip() for l in existing_lyrics_text.split('\n') if l.strip()]
-                chunk_duration_sec = 30.0
+                whisper_segments = results.get("segments", [])
+
+                # Match whisper segments to the plain text lyrics lines
+                # Simply chunk the lyrics text based on duration matching the segments
 
                 total_words = sum(len(line.split()) for line in lines)
                 words_per_sec = total_words / total_duration if total_duration > 0 else 1
 
                 current_line_idx = 0
-                for start_sec in range(0, int(total_duration), int(chunk_duration_sec)):
-                    end_sec = min(start_sec + chunk_duration_sec, total_duration)
-                    chunk_expected_words = int((end_sec - start_sec) * words_per_sec)
 
+                for segment in whisper_segments:
+                    seg_start = segment["start"]
+                    seg_end = segment["end"]
+
+                    if len(current_chunk_segments) == 0:
+                        current_chunk_start = seg_start
+
+                    current_chunk_segments.append(segment)
+
+                    if seg_end - current_chunk_start >= chunk_duration_target:
+                        chunk_expected_words = int((seg_end - current_chunk_start) * words_per_sec)
+                        chunk_lines = []
+                        chunk_words_count = 0
+
+                        while current_line_idx < len(lines):
+                            line = lines[current_line_idx]
+                            w_count = len(line.split())
+                            if chunk_words_count + w_count > chunk_expected_words * 1.5 and chunk_lines:
+                                break
+                            chunk_lines.append(line)
+                            chunk_words_count += w_count
+                            current_line_idx += 1
+
+                        if chunk_lines:
+                            # Pad slightly to allow word boundary freedom
+                            pad = 0.5
+                            chunks_to_process.append({
+                                "text": " \n ".join(chunk_lines), # Use newline to keep track later
+                                "start_sec": max(0.0, current_chunk_start - pad),
+                                "end_sec": min(total_duration, seg_end + pad),
+                                "offset": max(0.0, current_chunk_start - pad)
+                            })
+
+                        current_chunk_segments = []
+
+                # Append left overs
+                if current_chunk_segments or current_line_idx < len(lines):
                     chunk_lines = []
-                    chunk_words_count = 0
-
                     while current_line_idx < len(lines):
-                        line = lines[current_line_idx]
-                        w_count = len(line.split())
-                        if chunk_words_count + w_count > chunk_expected_words * 1.5 and chunk_lines:
-                            break
-                        chunk_lines.append(line)
-                        chunk_words_count += w_count
+                        chunk_lines.append(lines[current_line_idx])
                         current_line_idx += 1
+
+                    if not current_chunk_segments:
+                        start_sec = max(0.0, total_duration - 10.0)
+                        end_sec = total_duration
+                    else:
+                        start_sec = max(0.0, current_chunk_start - 0.5)
+                        end_sec = total_duration
 
                     if chunk_lines:
                         chunks_to_process.append({
-                            "text": " \n ".join(chunk_lines), # Use newline to keep track later
+                            "text": " \n ".join(chunk_lines),
                             "start_sec": start_sec,
                             "end_sec": end_sec,
                             "offset": start_sec
                         })
 
-                # Append left overs
-                while current_line_idx < len(lines):
-                    # just slap them on the end
-                    chunks_to_process.append({
-                        "text": lines[current_line_idx],
-                        "start_sec": total_duration - 5.0,
-                        "end_sec": total_duration,
-                        "offset": total_duration - 5.0
-                    })
-                    current_line_idx += 1
-
 
             # Execute chunked alignments
-            for chunk in chunks_to_process:
+            total_chunks = len(chunks_to_process)
+            for chunk_idx, chunk in enumerate(chunks_to_process):
+                if progress_store and video_id:
+                    progress_store[video_id] = {"status": f"Aligning chunk {chunk_idx + 1}/{total_chunks}...", "percent": 75 + int((chunk_idx / total_chunks) * 20)}
                 start_sample = int(chunk["start_sec"] * sample_rate)
                 end_sample = int(chunk["end_sec"] * sample_rate)
                 chunk_waveform = waveform[:, start_sample:end_sample]
@@ -283,6 +329,8 @@ class AudioProcessor:
                     final_segments.append(lines_data[l_idx])
 
         else:
+            if progress_store and video_id:
+                progress_store[video_id] = {"status": "No lyrics found. Transcribing audio...", "percent": 60}
             print("No lyrics provided! Falling back to fast whisper transcription...")
             import whisper_timestamped as whisper
             w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
