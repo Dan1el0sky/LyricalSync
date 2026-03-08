@@ -15,8 +15,11 @@ function App() {
   const [songData, setSongData] = useState(null); // Lyrics & sync data
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
 
   const audioRef = useRef(null);
+  const progressBarRef = useRef(null);
 
   const searchSongs = async (e) => {
     e.preventDefault();
@@ -74,6 +77,25 @@ function App() {
   const onTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
+      setDuration(audioRef.current.duration || 0);
+    }
+  };
+
+  const handleSeek = (e) => {
+    if (audioRef.current && duration > 0 && progressBarRef.current) {
+      const rect = progressBarRef.current.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const newTime = (clickX / rect.width) * duration;
+      audioRef.current.currentTime = newTime;
+      setCurrentTime(newTime);
+    }
+  };
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseFloat(e.target.value);
+    setVolume(newVolume);
+    if (audioRef.current) {
+      audioRef.current.volume = newVolume;
     }
   };
 
@@ -121,9 +143,9 @@ function App() {
         <div className="flex-1 overflow-y-auto w-full max-w-6xl mx-auto flex">
 
           {/* Results List */}
-          {(!currentSong || !songData) && (
+          {!currentSong && (
             <div className="w-full">
-              {loading && !currentSong && (
+              {loading && (
                 <div className="flex justify-center mt-20">
                   <Loader2 className="animate-spin text-green-500" size={48} />
                 </div>
@@ -205,21 +227,36 @@ function App() {
                             key={widx}
                             className={`inline-block mr-2 transition-colors duration-150 ${wordPast ? 'text-white' : (wordActive ? 'text-green-400' : '')}`}
                           >
-                            {/* Letter level precise effect within the active word */}
-                            {wordObj.word.split('').map((char, cidx) => {
-                              const charDuration = (wordObj.end - wordObj.start) / wordObj.word.length;
-                              const charStart = wordObj.start + (cidx * charDuration);
-                              const charActive = currentTime >= charStart;
+                            {/* Letter level precise effect within the active word using true backend timings */}
+                            {wordObj.chars && wordObj.chars.length > 0 ?
+                              wordObj.chars.map((charObj, cidx) => {
+                                const charActive = currentTime >= charObj.start;
 
-                              return (
-                                <span
-                                  key={cidx}
-                                  className={`transition-colors duration-75 ${charActive && wordActive ? 'text-green-400' : (wordPast ? 'text-white' : '')}`}
-                                >
-                                  {char}
-                                </span>
-                              )
-                            })}
+                                return (
+                                  <span
+                                    key={cidx}
+                                    className={`transition-colors duration-75 ${charActive && wordActive ? 'text-green-400' : (wordPast ? 'text-white' : '')}`}
+                                  >
+                                    {charObj.char}
+                                  </span>
+                                )
+                              })
+                              :
+                              wordObj.word.split('').map((char, cidx) => {
+                                const charDuration = (wordObj.end - wordObj.start) / wordObj.word.length;
+                                const charStart = wordObj.start + (cidx * charDuration);
+                                const charActive = currentTime >= charStart;
+
+                                return (
+                                  <span
+                                    key={cidx}
+                                    className={`transition-colors duration-75 ${charActive && wordActive ? 'text-green-400' : (wordPast ? 'text-white' : '')}`}
+                                  >
+                                    {char}
+                                  </span>
+                                )
+                              })
+                            }
                           </span>
                         );
                       })}
@@ -234,7 +271,23 @@ function App() {
 
       {/* Bottom Player Bar */}
       {currentSong && (
-        <div className="h-24 bg-black/80 backdrop-blur-xl border-t border-white/10 flex items-center justify-between px-6 z-20">
+        <div className="h-24 bg-black/80 backdrop-blur-xl border-t border-white/10 flex flex-col justify-center px-6 z-20 relative">
+
+          {/* Progress Bar */}
+          <div
+            ref={progressBarRef}
+            onClick={handleSeek}
+            className="absolute top-0 left-0 right-0 h-1.5 bg-white/20 cursor-pointer hover:h-2 transition-all group"
+          >
+            <div
+              className="h-full bg-green-500 relative"
+              style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+            >
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition shadow-lg translate-x-1/2" />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between mt-2">
           <div className="flex items-center gap-4 w-1/3">
             <img src={currentSong.thumbnail} alt="cover" className="w-14 h-14 rounded-md object-cover" />
             <div>
@@ -243,32 +296,53 @@ function App() {
             </div>
           </div>
 
-          <div className="flex flex-col items-center w-1/3">
-            <div className="flex items-center gap-6">
-              <button className="text-gray-400 hover:text-white transition"><SkipBack size={24} /></button>
-              <button
-                onClick={togglePlay}
-                className="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition"
-              >
-                {isPlaying ? <Pause size={20} /> : <Play size={20} className="ml-1" />}
-              </button>
-              <button className="text-gray-400 hover:text-white transition"><SkipForward size={24} /></button>
+            <div className="flex flex-col items-center w-1/3">
+              <div className="flex items-center gap-6">
+                <button
+                  onClick={() => { if(audioRef.current) audioRef.current.currentTime -= 10; }}
+                  className="text-gray-400 hover:text-white transition"
+                >
+                  <SkipBack size={24} />
+                </button>
+                <button
+                  onClick={togglePlay}
+                  className="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 transition"
+                >
+                  {isPlaying ? <Pause size={20} /> : <Play size={20} className="ml-1" />}
+                </button>
+                <button
+                  onClick={() => { if(audioRef.current) audioRef.current.currentTime += 10; }}
+                  className="text-gray-400 hover:text-white transition"
+                >
+                  <SkipForward size={24} />
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className="w-1/3 flex justify-end">
-            <Volume2 className="text-gray-400" />
-          </div>
+            <div className="w-1/3 flex justify-end items-center gap-3">
+              <Volume2 className="text-gray-400" size={20} />
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={volume}
+                onChange={handleVolumeChange}
+                className="w-24 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-white hover:accent-green-500 transition-all"
+              />
+            </div>
 
-          <audio
-            ref={audioRef}
-            src={songData ? `${API_BASE}/downloads/${currentSong.videoId}.mp3` : ''}
-            onTimeUpdate={onTimeUpdate}
-            onEnded={() => setIsPlaying(false)}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            autoPlay
-          />
+            <audio
+              ref={audioRef}
+              src={songData ? `${API_BASE}/downloads/${currentSong.videoId}.mp3` : ''}
+              onTimeUpdate={onTimeUpdate}
+              onLoadedMetadata={onTimeUpdate}
+              onEnded={() => setIsPlaying(false)}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              autoPlay
+            />
+          </div>
         </div>
       )}
     </div>

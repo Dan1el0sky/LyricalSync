@@ -89,15 +89,26 @@ async def process_song(request: DownloadRequest):
     # 1. Fetch Lyrics (to potentially display source lyrics)
     lyrics = lf.get_lyrics(title, artist)
 
-    # 2. Transcribe & Align via whisper-timestamped to get exact timings
-    # This aligns the official Musixmatch text to the audio, fulfilling the letter-precise request.
+    # 2. Align via torchaudio MMS FA to get exact character timings
+    # This aligns the official Musixmatch text to the audio without hallucinating wrong words.
     lyrics_text = ""
-    if lyrics and lyrics.get("type") in ["text", "lrc", "richsync_text"]:
-        lyrics_text = lyrics["data"]
+    richsync_data = None
+
+    if lyrics:
+        if lyrics.get("type") in ["text", "richsync_text"]:
+            lyrics_text = lyrics["data"]
+        elif lyrics.get("type") == "lrc":
+            import re
+            # Strip [00:00.00] tags from LRC so the aligner doesn't try to align the digits
+            lyrics_text = re.sub(r'\[\d{2}:\d{2}\.\d{2,3}\]', '', lyrics["data"])
+        elif lyrics.get("type") == "richsync":
+            richsync_data = lyrics["data"]
+            # Convert richsync to plain text for alignment fallback
+            lyrics_text = "\n".join([line.get("text", "") for line in richsync_data if "text" in line])
 
     try:
         # Run synchronous audio processing in thread to not block fastapi
-        result = await asyncio.to_thread(ap.process, output_path, lyrics_text)
+        result = await asyncio.to_thread(ap.process, output_path, lyrics_text, richsync_data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio processing failed: {str(e)}")
 

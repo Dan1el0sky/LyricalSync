@@ -10,3 +10,4 @@ whisper-timestamped
 demucs
 pydub
 faster-whisper
+unidecode
