@@ -158,8 +158,24 @@ async def process_song(request: DownloadRequest):
             lyrics_text = lyrics["data"]
         elif lyrics.get("type") == "lrc":
             import re
-            # Strip [00:00.00] tags from LRC so the aligner doesn't try to align the digits
+            # Parse LRC [00:00.00] tags into richsync-like format for accurate chunking
             lyrics_text = re.sub(r'\[\d{2}:\d{2}\.\d{2,3}\]', '', lyrics["data"])
+
+            richsync_data = []
+            for line in lyrics["data"].splitlines():
+                match = re.search(r'\[(\d{2}):(\d{2}\.\d{2,3})\]', line)
+                if match:
+                    minutes = int(match.group(1))
+                    seconds = float(match.group(2))
+                    ts = minutes * 60 + seconds
+
+                    text = re.sub(r'\[\d{2}:\d{2}\.\d{2,3}\]', '', line).strip()
+                    if text:
+                        richsync_data.append({
+                            "ts": ts,
+                            "te": 0.0, # Will be guessed in processor.py based on next phrase
+                            "text": text
+                        })
         elif lyrics.get("type") == "richsync":
             richsync_data = lyrics["data"]
             # Convert richsync to plain text for alignment fallback
