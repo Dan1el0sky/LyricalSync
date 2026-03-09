@@ -27,9 +27,9 @@ class AudioProcessor:
             self.dictionary = self.bundle.get_dict(star="*")
 
     def compute_alignments(self, emission, transcript, dictionary):
-        targets = torch.tensor([dictionary[c] for c in transcript], dtype=torch.int32)
-        alignments, scores = torchaudio.functional.forced_align(emission, targets, blank=0)
-        return alignments, scores
+        targets = torch.tensor([[dictionary[c] for c in transcript]], dtype=torch.int32)
+        alignments, scores = torchaudio.functional.forced_align(emission.unsqueeze(0), targets, blank=0)
+        return alignments[0], scores[0]
 
     def _clean_text(self, text):
         text = unidecode(text).lower()
@@ -71,7 +71,6 @@ class AudioProcessor:
 
         try:
             alignments, scores = self.compute_alignments(emission, transcript, self.dictionary)
-            alignments = alignments[0]
         except Exception as e:
             print("Forced alignment chunk failed, returning evenly spaced timings. Error:", e)
             return self._fake_align(words, waveform.shape[1]/self.bundle.sample_rate, offset_time)
