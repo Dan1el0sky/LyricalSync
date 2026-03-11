@@ -71,6 +71,8 @@ class AudioProcessor:
 
         try:
             alignments, scores = self.compute_alignments(emission, transcript, self.dictionary)
+            from torchaudio.functional import merge_tokens
+            token_spans = merge_tokens(alignments, scores)
         except Exception as e:
             print("Forced alignment chunk failed, returning evenly spaced timings. Error:", e)
             return self._fake_align(words, waveform.shape[1]/self.bundle.sample_rate, offset_time)
@@ -86,11 +88,13 @@ class AudioProcessor:
             char_timings = []
 
             for idx in range(span["start_idx"], span["end_idx"]):
-                token_frames = (alignments == idx).nonzero(as_tuple=True)[0]
-                if len(token_frames) > 0:
-                    c_start = (token_frames[0].item() * frame_dur) + offset_time
-                    c_end = ((token_frames[-1].item() + 1) * frame_dur) + offset_time
-                    if start_frame is None: start_frame = c_start
+                if idx < len(token_spans):
+                    tspan = token_spans[idx]
+                    c_start = (tspan.start * frame_dur) + offset_time
+                    c_end = (tspan.end * frame_dur) + offset_time
+
+                    if start_frame is None:
+                        start_frame = c_start
                     end_frame = c_end
 
                     char_timings.append({
