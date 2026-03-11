@@ -54,36 +54,71 @@ class AudioProcessor:
             # Reconstruct richsync if available, otherwise just use raw text
             text_to_align = existing_lyrics_text
 
+            # align can aggressively stretch words across gaps.
+            # Using refine=True improves boundary alignment locally.
+            # demucs=True (if installed) or original_split=True are options but we removed demucs.
             result = self.model.align(waveform, text_to_align, language='en')
 
             # Convert stable-whisper result into expected JSON format
             for segment in result.segments:
-                seg_dict = {
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text.strip(),
-                    "words": []
-                }
-                for word in segment.words:
+                # To prevent a single sentence from spanning a 15-second gap like in "As It Was",
+                # we will detect if the gap BETWEEN two consecutive words is > 4.0 seconds,
+                # and if so, split the segment there.
+
+                current_seg_words = []
+                current_seg_start = segment.words[0].start if segment.words else segment.start
+
+                for i, word in enumerate(segment.words):
+                    w_text = word.word.strip()
+                    if not w_text:
+                        continue
+
+                    w_start = word.start
+                    w_end = word.end
+
+                    # Prevent zero-duration skips which make words flash instantly
+                    if w_end - w_start < 0.1:
+                        w_end = w_start + 0.2
+
+                    # Cap word durations so long instrumentals don't stretch the word "you" for 10 seconds
+                    if w_end - w_start > 3.0:
+                        w_end = w_start + 1.0
+
+                    # If there's a huge gap before this word, push the previous words as a segment and start fresh
+                    if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        final_segments.append({
+                            "start": current_seg_start,
+                            "end": current_seg_words[-1]["end"],
+                            "text": " ".join([w["word"] for w in current_seg_words]),
+                            "words": current_seg_words
+                        })
+                        current_seg_words = []
+                        current_seg_start = w_start
+
                     word_dict = {
-                        "word": word.word.strip(),
-                        "start": word.start,
-                        "end": word.end,
-                        # Character level timings can be approximated evenly since frontend handles `chars` array
+                        "word": w_text,
+                        "start": w_start,
+                        "end": w_end,
                         "chars": []
                     }
-                    w_text = word.word.strip()
-                    if len(w_text) > 0:
-                        w_dur = word.end - word.start
-                        c_dur = w_dur / len(w_text)
-                        for i, c in enumerate(w_text):
-                            word_dict["chars"].append({
-                                "char": c,
-                                "start": word.start + i * c_dur,
-                                "end": word.start + (i + 1) * c_dur
-                            })
-                    seg_dict["words"].append(word_dict)
-                final_segments.append(seg_dict)
+
+                    w_dur = w_end - w_start
+                    c_dur = w_dur / len(w_text)
+                    for idx_c, c in enumerate(w_text):
+                        word_dict["chars"].append({
+                            "char": c,
+                            "start": w_start + idx_c * c_dur,
+                            "end": w_start + (idx_c + 1) * c_dur
+                        })
+                    current_seg_words.append(word_dict)
+
+                if current_seg_words:
+                    final_segments.append({
+                        "start": current_seg_start,
+                        "end": current_seg_words[-1]["end"],
+                        "text": " ".join([w["word"] for w in current_seg_words]),
+                        "words": current_seg_words
+                    })
 
         else:
             if progress_store and video_id:
@@ -93,31 +128,57 @@ class AudioProcessor:
             result = self.model.transcribe(waveform, language='en', word_timestamps=True)
 
             for segment in result.segments:
-                seg_dict = {
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": segment.text.strip(),
-                    "words": []
-                }
-                for word in segment.words:
+                current_seg_words = []
+                current_seg_start = segment.words[0].start if segment.words else segment.start
+
+                for i, word in enumerate(segment.words):
+                    w_text = word.word.strip()
+                    if not w_text:
+                        continue
+
+                    w_start = word.start
+                    w_end = word.end
+
+                    if w_end - w_start < 0.1:
+                        w_end = w_start + 0.2
+
+                    if w_end - w_start > 3.0:
+                        w_end = w_start + 1.0
+
+                    if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        final_segments.append({
+                            "start": current_seg_start,
+                            "end": current_seg_words[-1]["end"],
+                            "text": " ".join([w["word"] for w in current_seg_words]),
+                            "words": current_seg_words
+                        })
+                        current_seg_words = []
+                        current_seg_start = w_start
+
                     word_dict = {
-                        "word": word.word.strip(),
-                        "start": word.start,
-                        "end": word.end,
+                        "word": w_text,
+                        "start": w_start,
+                        "end": w_end,
                         "chars": []
                     }
-                    w_text = word.word.strip()
-                    if len(w_text) > 0:
-                        w_dur = word.end - word.start
-                        c_dur = w_dur / len(w_text)
-                        for i, c in enumerate(w_text):
-                            word_dict["chars"].append({
-                                "char": c,
-                                "start": word.start + i * c_dur,
-                                "end": word.start + (i + 1) * c_dur
-                            })
-                    seg_dict["words"].append(word_dict)
-                final_segments.append(seg_dict)
+
+                    w_dur = w_end - w_start
+                    c_dur = w_dur / len(w_text)
+                    for idx_c, c in enumerate(w_text):
+                        word_dict["chars"].append({
+                            "char": c,
+                            "start": w_start + idx_c * c_dur,
+                            "end": w_start + (idx_c + 1) * c_dur
+                        })
+                    current_seg_words.append(word_dict)
+
+                if current_seg_words:
+                    final_segments.append({
+                        "start": current_seg_start,
+                        "end": current_seg_words[-1]["end"],
+                        "text": " ".join([w["word"] for w in current_seg_words]),
+                        "words": current_seg_words
+                    })
 
         # Inject instrumental gaps
         segments_with_gaps = []
