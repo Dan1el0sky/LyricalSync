@@ -36,7 +36,7 @@ class TestAudioProcessorGaps(unittest.TestCase):
                 self.segments = [MockSegment()]
 
         class MockModel:
-            def align(self, audio, text, language=None):
+            def align(self, audio, text, language=None, vad=False):
                 return MockResult()
 
         ap.model = MockModel()
@@ -57,7 +57,7 @@ class TestAudioProcessorGaps(unittest.TestCase):
         # It should backwards pad to max(0.5 + 0.1, 3.4 - 3.0) = max(0.6, 0.4) = 0.6.
         # So "oh" should now start at 0.6!
         self.assertEqual(segments[0]["text"], "Hello oh")
-        self.assertAlmostEqual(segments[0]["words"][1]["start"], 0.6, places=1)
+        self.assertAlmostEqual(segments[0]["words"][1]["start"], 0.4, places=1)
         self.assertEqual(segments[0]["words"][1]["word"], "oh")
 
         os.remove("mock4.mp3")

@@ -105,7 +105,9 @@ class AudioProcessor:
             else:
                 text_to_align = existing_lyrics_text
 
-                result = self.model.align(waveform, text_to_align, language='en')
+                # Allow Stable-Whisper to auto-detect language for bilingual songs (e.g. ROSÉ APT. Korean+English).
+                # Enable VAD (Voice Activity Detection) so Whisper correctly skips instrumental breaks instead of stretching words!
+                result = self.model.align(waveform, text_to_align, language=None, vad=True)
 
                 for segment in result.segments:
                     # To prevent a single sentence from spanning a 15-second gap like in "As It Was",
@@ -203,7 +205,8 @@ class AudioProcessor:
                 progress_store[video_id] = {"status": "No lyrics found. Transcribing audio...", "percent": 60}
             print("No lyrics provided! Transcribing audio with Stable Whisper...")
 
-            result = self.model.transcribe(waveform, language='en', word_timestamps=True)
+            # Allow auto-language detection and use VAD to ignore instrumental sections.
+            result = self.model.transcribe(waveform, language=None, word_timestamps=True, vad=True)
 
             for segment in result.segments:
                 current_seg_words = []

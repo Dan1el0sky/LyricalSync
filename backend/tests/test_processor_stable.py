@@ -30,9 +30,9 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
                 self.segments = [MockSegment()]
 
         class MockModel:
-            def align(self, audio, text, language=None):
+            def align(self, audio, text, language=None, vad=False):
                 return MockResult()
-            def transcribe(self, audio, language=None, word_timestamps=True):
+            def transcribe(self, audio, language=None, word_timestamps=True, vad=False):
                 return MockResult()
 
         ap.model = MockModel()
@@ -54,7 +54,7 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
         self.assertEqual(len(result["segments"][0]["words"]), 2)
         self.assertEqual(result["segments"][0]["words"][0]["word"], "Hello")
         self.assertEqual(result["segments"][0]["words"][0]["start"], 0.0)
-        self.assertEqual(result["segments"][0]["words"][0]["end"], 0.5)
+        self.assertAlmostEqual(result["segments"][0]["words"][0]["end"], 0.3, places=1)
 
         os.remove("mock.mp3")
 

@@ -54,10 +54,16 @@ class LyricsFetcher:
                 return None
             track_id = track_list[0]["track"]["track_id"]
 
+            # Helper to safely extract from Musixmatch body
+            def safe_extract(res_json, key1, key2):
+                body = res_json.get("message", {}).get("body", {})
+                if not isinstance(body, dict): return None
+                return body.get(key1, {}).get(key2)
+
             # 1. Try richsync
             richsync_url = f"https://apic-desktop.musixmatch.com/ws/1.1/track.richsync.get?app_id=web-desktop-app-v1.0&track_id={track_id}&usertoken={token}"
             richsync_res = requests.get(richsync_url, headers=headers).json()
-            richsync_body = richsync_res.get("message", {}).get("body", {}).get("richsync", {}).get("richsync_body")
+            richsync_body = safe_extract(richsync_res, "richsync", "richsync_body")
 
             if richsync_body:
                 try:
@@ -69,14 +75,14 @@ class LyricsFetcher:
             lyrics_url = f"https://apic-desktop.musixmatch.com/ws/1.1/track.subtitle.get?app_id=web-desktop-app-v1.0&track_id={track_id}&usertoken={token}"
             lyrics_res = requests.get(lyrics_url, headers=headers).json()
 
-            subtitle_body = lyrics_res.get("message", {}).get("body", {}).get("subtitle", {}).get("subtitle_body")
+            subtitle_body = safe_extract(lyrics_res, "subtitle", "subtitle_body")
             if subtitle_body:
                 return {"source": "musixmatch", "synced": True, "type": "lrc", "data": subtitle_body}
 
             # 3. Try plain lyrics
             plain_url = f"https://apic-desktop.musixmatch.com/ws/1.1/track.lyrics.get?app_id=web-desktop-app-v1.0&track_id={track_id}&usertoken={token}"
             plain_res = requests.get(plain_url, headers=headers).json()
-            lyrics_body = plain_res.get("message", {}).get("body", {}).get("lyrics", {}).get("lyrics_body")
+            lyrics_body = safe_extract(plain_res, "lyrics", "lyrics_body")
             if lyrics_body:
                 return {"source": "musixmatch", "synced": False, "type": "text", "data": lyrics_body.split("*******")[0].strip()}
 
@@ -152,9 +158,11 @@ class LyricsFetcher:
                     lyrics_text = re.sub(r'\[.*?\]', '', lyrics_text)
 
                     # Genius often injects a header like "101 ContributorsTranslationsPortuguêsCall Me Maybe Lyrics"
-                    # before the actual first line of the song. We remove everything up to and including the first "Lyrics\n"
-                    # or "Lyrics " at the start of the text block.
                     lyrics_text = re.sub(r'^.*?Lyrics\s*\n?', '', lyrics_text, count=1, flags=re.IGNORECASE|re.DOTALL)
+
+                    # Sometimes Genius injects the "About this song" summary which ends in "...Read More"
+                    if "Read More" in lyrics_text:
+                        lyrics_text = re.sub(r'^.*?Read More\s*\n*', '', lyrics_text, count=1, flags=re.IGNORECASE|re.DOTALL)
 
                     # Fix multiple consecutive newlines
                     lyrics_text = re.sub(r'\n{3,}', '\n\n', lyrics_text)
