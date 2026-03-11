@@ -1,4 +1,9 @@
-import os
+import re
+
+with open("processor.py", "r") as f:
+    code = f.read()
+
+new_code = """import os
 import torch
 import json
 import re
@@ -145,3 +150,7 @@ class AudioProcessor:
         }
 
 processor = AudioProcessor()
+"""
+
+with open("processor.py", "w") as f:
+    f.write(new_code)
