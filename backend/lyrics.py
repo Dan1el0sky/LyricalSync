@@ -143,8 +143,20 @@ class LyricsFetcher:
                 if lyrics_divs:
                     for br in soup.find_all("br"):
                         br.replace_with("\n")
-                    lyrics_text = "\n".join([div.get_text() for div in lyrics_divs])
+
+                    # Use separator='\n' to prevent words in separate spans from getting merged without spaces
+                    # (e.g. <span>threw</span><span>a</span> -> threw a)
+                    lyrics_text = "\n".join([div.get_text(separator="\n", strip=True) for div in lyrics_divs])
+
+                    # Remove [Verse 1], [Chorus], etc
                     lyrics_text = re.sub(r'\[.*?\]', '', lyrics_text)
+
+                    # Genius often injects a header like "101 ContributorsTranslationsPortuguêsCall Me Maybe Lyrics"
+                    # before the actual first line of the song. We remove everything up to and including the first "Lyrics\n"
+                    # or "Lyrics " at the start of the text block.
+                    lyrics_text = re.sub(r'^.*?Lyrics\s*\n?', '', lyrics_text, count=1, flags=re.IGNORECASE|re.DOTALL)
+
+                    # Fix multiple consecutive newlines
                     lyrics_text = re.sub(r'\n{3,}', '\n\n', lyrics_text)
                     return {"source": "genius", "synced": False, "type": "text", "data": lyrics_text.strip()}
             except Exception as e:
