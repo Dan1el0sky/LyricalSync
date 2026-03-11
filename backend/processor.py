@@ -148,23 +148,75 @@ class AudioProcessor:
             audio = AudioSegment.from_file(audio_path)
             sample_rate = audio.frame_rate
 
-            # Convert to mono
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
-
             # Convert to raw data
             samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+
+            # If stereo, reshape to (channels, samples)
+            if audio.channels > 1:
+                samples = samples.reshape((-1, audio.channels)).T
+            else:
+                samples = samples.reshape((1, -1))
 
             # Normalize to [-1.0, 1.0]
             max_val = np.abs(samples).max()
             if max_val > 0:
                 samples = samples / max_val
 
-            waveform = torch.from_numpy(samples).unsqueeze(0) # shape: (1, samples)
+            waveform = torch.from_numpy(samples) # shape: (channels, samples)
 
         except Exception as e:
             print(f"Error loading audio via pydub: {e}")
             raise e
+
+        # Extract clean vocals for better alignment accuracy using Demucs
+        if progress_store and video_id:
+            progress_store[video_id] = {"status": "Separating clean vocals (demucs)...", "percent": 60}
+        print("Running Demucs to isolate vocals...")
+
+        try:
+            from demucs.pretrained import get_model
+            from demucs.apply import apply_model
+
+            # Use the lightweight htdemucs model (less memory footprint than demucs_ht)
+            demucs_model = get_model('htdemucs')
+            demucs_model.to(self.device)
+            demucs_model.eval()
+
+            # Prepare waveform for demucs
+            demucs_wav = waveform.clone()
+            if demucs_wav.shape[0] == 1:
+                demucs_wav = demucs_wav.repeat(2, 1) # Must be stereo for demucs
+
+            if sample_rate != demucs_model.samplerate:
+                resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=demucs_model.samplerate)
+                demucs_wav = resampler(demucs_wav)
+                sample_rate = demucs_model.samplerate
+
+            demucs_wav = demucs_wav.unsqueeze(0).to(self.device)
+
+            with torch.no_grad():
+                # shifts=1 is fastest, split=True chunks long audio to save memory
+                sources = apply_model(demucs_model, demucs_wav, shifts=1, split=True, overlap=0.25)
+
+            # htdemucs sources: ["drums", "bass", "other", "vocals"]
+            vocal_idx = demucs_model.sources.index('vocals')
+            vocals = sources[0, vocal_idx].cpu()
+
+            # Convert back to mono for alignment processing
+            waveform = vocals.mean(dim=0, keepdim=True)
+            print("Successfully extracted vocals!")
+
+            # Cleanup demucs memory
+            del demucs_model
+            del sources
+            del demucs_wav
+            torch.cuda.empty_cache()
+
+        except Exception as e:
+            print(f"Demucs vocal separation failed: {e}. Falling back to original audio.")
+            # Fallback to mono mixed audio
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
 
         final_segments = []
 
@@ -215,6 +267,9 @@ class AudioProcessor:
                 import whisper_timestamped as whisper
                 w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
                 w_audio = whisper.load_audio(audio_path)
+                # Ensure Whisper uses the clean vocal stem if available
+                # whisper expects mono 16k np array
+                w_audio = torchaudio.functional.resample(waveform.cpu(), sample_rate, 16000)[0].numpy()
                 results = whisper.transcribe(w_model, w_audio, language="en")
 
                 # Create chunks based on whisper segments
@@ -337,7 +392,8 @@ class AudioProcessor:
             print("No lyrics provided! Falling back to fast whisper transcription...")
             import whisper_timestamped as whisper
             w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
-            w_audio = whisper.load_audio(audio_path)
+            # Ensure Whisper uses the clean vocal stem if available
+            w_audio = torchaudio.functional.resample(waveform.cpu(), sample_rate, 16000)[0].numpy()
             results = whisper.transcribe(w_model, w_audio, language="en")
 
             for segment in results["segments"]:
