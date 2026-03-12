@@ -521,53 +521,24 @@ function App() {
                     return (
                       <div
                         key={idx}
-                        className={`text-3xl sm:text-4xl lg:text-[2.75rem] font-bold transition-all duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] py-4 lg:py-6 origin-left leading-[1.3] w-full
+                        className={`text-3xl sm:text-4xl lg:text-[2.75rem] font-bold transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] py-4 lg:py-6 origin-left leading-[1.3] w-full
                           ${isActive ? 'active-lyric opacity-100 scale-[1.02] text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]' :
                            (isPast ? 'opacity-40 text-white/80 scale-100 blur-[0.5px]' :
                                      'opacity-20 text-white/60 scale-95 blur-[1px]')}`}
                       >
                         {seg.words.map((wordObj, widx) => {
-                          const wordPast = currentTime > wordObj.end;
-                          const wordActive = currentTime >= wordObj.start && currentTime <= wordObj.end;
+                          const wordActive = currentTime >= wordObj.start;
 
                           return (
-                            <span key={widx} className="inline-block mr-[0.25em] relative">
-                              {/* Character level highlight */}
-                              {wordObj.chars && wordObj.chars.length > 0 ? (
-                                wordObj.chars.map((charObj, cidx) => {
-                                  const charActive = currentTime >= charObj.start;
-                                  return (
-                                    <span
-                                      key={cidx}
-                                      className={`transition-colors duration-150 ${charActive ? 'text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]' : (isActive ? 'text-white/40' : '')}`}
-                                      style={{
-                                        color: charActive && isActive ? '#fff' : undefined,
-                                        textShadow: charActive && isActive ? '0 0 20px rgba(255,255,255,0.5), 0 0 10px #d946ef' : 'none'
-                                      }}
-                                    >
-                                      {charObj.char}
-                                    </span>
-                                  )
-                                })
-                              ) : (
-                                wordObj.word.split('').map((char, cidx) => {
-                                  const charDuration = (wordObj.end - wordObj.start) / wordObj.word.length;
-                                  const charStart = wordObj.start + (cidx * charDuration);
-                                  const charActive = currentTime >= charStart;
-                                  return (
-                                    <span
-                                      key={cidx}
-                                      className={`transition-colors duration-150`}
-                                      style={{
-                                        color: charActive && isActive ? '#fff' : (isActive ? 'rgba(255,255,255,0.4)' : undefined),
-                                        textShadow: charActive && isActive ? '0 0 20px rgba(255,255,255,0.5), 0 0 10px #d946ef' : 'none'
-                                      }}
-                                    >
-                                      {char}
-                                    </span>
-                                  )
-                                })
-                              )}
+                            <span
+                              key={widx}
+                              className={`inline-block mr-[0.25em] relative transition-colors duration-75`}
+                              style={{
+                                color: wordActive && isActive ? '#fff' : (isActive ? 'rgba(255,255,255,0.4)' : undefined),
+                                textShadow: wordActive && isActive ? '0 0 20px rgba(255,255,255,0.5), 0 0 10px #d946ef' : 'none'
+                              }}
+                            >
+                              {wordObj.word}
                             </span>
                           );
                         })}

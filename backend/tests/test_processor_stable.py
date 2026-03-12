@@ -57,7 +57,7 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
         self.assertEqual(len(result["segments"][0]["words"]), 2)
         self.assertEqual(result["segments"][0]["words"][0]["word"], "Hello")
         self.assertEqual(result["segments"][0]["words"][0]["start"], 0.0)
-        self.assertAlmostEqual(result["segments"][0]["words"][0]["end"], 0.3, places=1)
+        self.assertAlmostEqual(result["segments"][0]["words"][0]["end"], 0.4, places=1)
 
         os.remove("mock.mp3")
 

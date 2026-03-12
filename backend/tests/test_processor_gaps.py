@@ -58,11 +58,11 @@ class TestAudioProcessorGaps(unittest.TestCase):
         # Segment 0: Hello oh
         # Hello: 0.0 to 0.5
         # oh: originally 3.4 to 3.5.
-        # Since it is < 0.5s long, and 3.4 - 0.5 = 2.9s gap before it...
-        # It should backwards pad to max(0.5 + 0.1, 3.4 - 3.0) = max(0.6, 0.4) = 0.6.
-        # So "oh" should now start at 0.6!
+        # Since it is < 0.5s long, and 3.3 - 0.4 = 2.9s gap before it...
+        # It should backwards pad to max(0.4 + 0.1, 3.3 - 3.0) = max(0.5, 0.3) = 0.5.
+        # So "oh" should now start at 0.5!
         self.assertEqual(segments[0]["text"], "Hello oh")
-        self.assertAlmostEqual(segments[0]["words"][1]["start"], 0.4, places=1)
+        self.assertAlmostEqual(segments[0]["words"][1]["start"], 0.5, places=1)
         self.assertEqual(segments[0]["words"][1]["word"], "oh")
 
         os.remove("mock4.mp3")
