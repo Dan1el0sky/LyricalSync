@@ -10,12 +10,9 @@ load_dotenv()
 
 class LyricsFetcher:
     def __init__(self):
-        # Allow user to set their own Musixmatch token via env var
         self.mxm_token = os.getenv("MUSIXMATCH_TOKEN", "")
-        # Allow user to set their own Genius access token
         self.genius_token = os.getenv("GENIUS_ACCESS_TOKEN", "")
 
-        # If no custom mxm token, we'll try to get one using the desktop API
         if not self.mxm_token:
             self.mxm_token = self._get_anonymous_mxm_token()
 
@@ -28,16 +25,14 @@ class LyricsFetcher:
         try:
             response = requests.get(url, headers=headers)
             data = response.json()
-            if data["message"]["header"]["status_code"] == 200:
+            if data.get("message", {}).get("header", {}).get("status_code") == 200:
                 return data["message"]["body"]["user_token"]
-        except Exception as e:
+        except Exception:
             pass
-        # Fallback to a hardcoded desktop token if request fails/captcha'd
         return "23120632420387b337c7ab0fa1e6fdbbf4bdfa57db9dfd0f28246e"
 
     def fetch_mxm_lyrics(self, title, artist):
         token = self.mxm_token
-
         query = f"{title} {artist}"
         encoded_query = urllib.parse.quote(query)
 
@@ -54,7 +49,6 @@ class LyricsFetcher:
                 return None
             track_id = track_list[0]["track"]["track_id"]
 
-            # Helper to safely extract from Musixmatch body
             def safe_extract(res_json, key1, key2):
                 body = res_json.get("message", {}).get("body", {})
                 if not isinstance(body, dict): return None
@@ -68,10 +62,10 @@ class LyricsFetcher:
             if richsync_body:
                 try:
                     return {"source": "musixmatch", "synced": True, "type": "richsync", "data": json.loads(richsync_body)}
-                except:
+                except Exception:
                     return {"source": "musixmatch", "synced": True, "type": "richsync_text", "data": richsync_body}
 
-            # 2. Try subtitle
+            # 2. Try subtitle (LRC)
             lyrics_url = f"https://apic-desktop.musixmatch.com/ws/1.1/track.subtitle.get?app_id=web-desktop-app-v1.0&track_id={track_id}&usertoken={token}"
             lyrics_res = requests.get(lyrics_url, headers=headers).json()
 
@@ -84,108 +78,50 @@ class LyricsFetcher:
             plain_res = requests.get(plain_url, headers=headers).json()
             lyrics_body = safe_extract(plain_res, "lyrics", "lyrics_body")
             if lyrics_body:
-                return {"source": "musixmatch", "synced": False, "type": "text", "data": lyrics_body.split("*******")[0].strip()}
+                text = lyrics_body.split("*******")[0].strip()
+                return {"source": "musixmatch", "synced": False, "type": "text", "data": text}
 
         except Exception as e:
             print(f"Musixmatch error: {e}")
 
         return None
 
-    def fetch_genius_lyrics(self, title, artist):
+    def fetch_lrclib_lyrics(self, title, artist):
         query = f"{title} {artist}"
+        url = f"https://lrclib.net/api/search?q={urllib.parse.quote(query)}"
+        headers = {"User-Agent": "LyricalSync/1.0 (https://github.com/lyricalsync)"}
 
-        # If user provided a Genius API token, use their official API to search
-        song_url = None
-        if self.genius_token:
-            search_api_url = f"https://api.genius.com/search?q={urllib.parse.quote(query)}"
-            headers = {"Authorization": f"Bearer {self.genius_token}"}
-            try:
-                res = requests.get(search_api_url, headers=headers)
-                if res.status_code == 200:
-                    hits = res.json().get("response", {}).get("hits", [])
-                    if hits:
-                        song_url = hits[0]["result"]["url"]
-            except Exception as e:
-                print(f"Genius API error: {e}")
-
-        # If API search failed or no token provided, fallback to standard web scraping search
-        if not song_url:
-            search_html_url = f"https://genius.com/api/search/multi?per_page=1&q={urllib.parse.quote(query)}"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            try:
-                res = requests.get(search_html_url, headers=headers)
-                res_json = res.json()
-                sections = res_json.get("response", {}).get("sections", [])
-                for section in sections:
-                    if section["type"] == "song":
-                        hits = section.get("hits", [])
-                        if hits:
-                            song_url = hits[0]["result"]["url"]
-            except Exception as e:
-                # If direct search API blocks us, try DDG HTML fallback
-                try:
-                    ddg_url = f"https://html.duckduckgo.com/html/?q=site:genius.com {urllib.parse.quote(query)} lyrics"
-                    res = requests.get(ddg_url, headers=headers)
-                    soup = BeautifulSoup(res.text, "html.parser")
-                    for a in soup.find_all('a', class_='result__url'):
-                        href = a.get('href', '')
-                        if 'genius.com' in href and not '/artists/' in href and not '/albums/' in href:
-                            song_url = href
-                            if song_url.startswith("//"): song_url = "https:" + song_url
-                            elif song_url.startswith("/l/?uddg="):
-                                qs = urllib.parse.parse_qs(urllib.parse.urlparse(song_url).query)
-                                song_url = qs.get("uddg", [None])[0]
-                            break
-                except:
-                    pass
-
-        # If we successfully found a song URL from Genius, scrape the lyrics container
-        if song_url:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            try:
-                page = requests.get(song_url, headers=headers)
-                soup = BeautifulSoup(page.text, "html.parser")
-                lyrics_divs = soup.find_all("div", attrs={"data-lyrics-container": "true"})
-                if lyrics_divs:
-                    for br in soup.find_all("br"):
-                        br.replace_with("\n")
-
-                    # Use separator='\n' to prevent words in separate spans from getting merged without spaces
-                    # (e.g. <span>threw</span><span>a</span> -> threw a)
-                    lyrics_text = "\n".join([div.get_text(separator="\n", strip=True) for div in lyrics_divs])
-
-                    # Remove [Verse 1], [Chorus], etc
-                    lyrics_text = re.sub(r'\[.*?\]', '', lyrics_text)
-
-                    # Genius often injects a header like "101 ContributorsTranslationsPortuguêsCall Me Maybe Lyrics"
-                    lyrics_text = re.sub(r'^.*?Lyrics\s*\n?', '', lyrics_text, count=1, flags=re.IGNORECASE|re.DOTALL)
-
-                    # Sometimes Genius injects the "About this song" summary which ends in "...Read More"
-                    if "Read More" in lyrics_text:
-                        lyrics_text = re.sub(r'^.*?Read More\s*\n*', '', lyrics_text, count=1, flags=re.IGNORECASE|re.DOTALL)
-
-                    # Fix multiple consecutive newlines
-                    lyrics_text = re.sub(r'\n{3,}', '\n\n', lyrics_text)
-                    return {"source": "genius", "synced": False, "type": "text", "data": lyrics_text.strip()}
-            except Exception as e:
-                print(f"Genius scrape error: {e}")
+        try:
+            res = requests.get(url, headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    best_match = data[0]
+                    # Prefer synced lyrics (LRC)
+                    if best_match.get('syncedLyrics'):
+                        return {"source": "lrclib", "synced": True, "type": "lrc", "data": best_match['syncedLyrics']}
+                    elif best_match.get('plainLyrics'):
+                        text = re.sub(r'\[.*?\]', '', best_match['plainLyrics'])
+                        text = re.sub(r'\n{3,}', '\n\n', text)
+                        return {"source": "lrclib", "synced": False, "type": "text", "data": text.strip()}
+        except Exception as e:
+            print(f"LRCLIB error: {e}")
 
         return None
 
     def get_lyrics(self, title, artist):
-        # 1. Try Musixmatch (Custom Token or Anonymous Desktop Token)
         res = self.fetch_mxm_lyrics(title, artist)
-        if res:
+        if res and res.get("data"):
             print("Successfully found lyrics from Musixmatch.")
             return res
 
-        # 2. Try Genius (Custom Token or Anonymous Web Scrape)
-        print("Musixmatch failed. Falling back to Genius...")
-        res = self.fetch_genius_lyrics(title, artist)
-        if res:
-            print("Successfully found lyrics from Genius.")
+        # Genius scraping is blocked by Cloudflare.
+        # Using LRCLIB which provides perfectly synced LRC out of the box for free.
+        print("Musixmatch failed. Falling back to LRCLIB...")
+        res = self.fetch_lrclib_lyrics(title, artist)
+        if res and res.get("data"):
+            print("Successfully found lyrics from LRCLIB.")
             return res
 
-        # 3. Both failed. Returning None will trigger Whisper Transcription in processor.py
-        print("Genius failed. Falling back to complete Whisper transcription...")
+        print("LRCLIB failed. Falling back to complete Whisper transcription...")
         return None

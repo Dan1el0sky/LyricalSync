@@ -182,9 +182,13 @@ class AudioProcessor:
 
                     # If there's a huge gap before this word, push the previous words as a segment and start fresh
                     if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        # Ensure we don't end exactly at start time (causes zero duration)
+                        seg_end = current_seg_words[-1]["end"]
+                        if seg_end <= current_seg_start:
+                            seg_end = current_seg_start + 0.1
                         final_segments.append({
                             "start": current_seg_start,
-                            "end": current_seg_words[-1]["end"],
+                            "end": seg_end,
                             "text": " ".join([w["word"] for w in current_seg_words]),
                             "words": current_seg_words
                         })
@@ -209,9 +213,12 @@ class AudioProcessor:
                     current_seg_words.append(word_dict)
 
                 if current_seg_words:
+                    seg_end = current_seg_words[-1]["end"]
+                    if seg_end <= current_seg_start:
+                        seg_end = current_seg_start + 0.1
                     final_segments.append({
                         "start": current_seg_start,
-                        "end": current_seg_words[-1]["end"],
+                        "end": seg_end,
                         "text": " ".join([w["word"] for w in current_seg_words]),
                         "words": current_seg_words
                     })
@@ -264,9 +271,12 @@ class AudioProcessor:
                             w_end = w_start + 2.0
 
                     if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        seg_end = current_seg_words[-1]["end"]
+                        if seg_end <= current_seg_start:
+                            seg_end = current_seg_start + 0.1
                         final_segments.append({
                             "start": current_seg_start,
-                            "end": current_seg_words[-1]["end"],
+                            "end": seg_end,
                             "text": " ".join([w["word"] for w in current_seg_words]),
                             "words": current_seg_words
                         })
@@ -291,9 +301,12 @@ class AudioProcessor:
                     current_seg_words.append(word_dict)
 
                 if current_seg_words:
+                    seg_end = current_seg_words[-1]["end"]
+                    if seg_end <= current_seg_start:
+                        seg_end = current_seg_start + 0.1
                     final_segments.append({
                         "start": current_seg_start,
-                        "end": current_seg_words[-1]["end"],
+                        "end": seg_end,
                         "text": " ".join([w["word"] for w in current_seg_words]),
                         "words": current_seg_words
                     })

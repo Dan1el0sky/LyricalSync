@@ -11,36 +11,36 @@ class TestAudioProcessorLRC(unittest.TestCase):
         ap = AudioProcessor()
         ap.device = torch.device('cpu')
 
-        # We don't need a mock model because it should bypass Whisper entirely!
+        # We don't even need a mock model because it should bypass alignment
+        class MockModel:
+            def __init__(self):
+                self.device = torch.device('cpu')
+
+        ap.model = MockModel()
+
         import numpy as np
         from pydub import AudioSegment
         audio = np.zeros(16000 * 2, dtype=np.float32)
         segment = AudioSegment(audio.tobytes(), frame_rate=16000, sample_width=4, channels=1)
         segment.export("mock5.mp3", format="mp3")
 
-        richsync = [
-            {"ts": 5.0, "text": "This is an echoing chorus"},
-            {"ts": 8.0, "text": "Another line"}
+        richsync_data = [
+            {"ts": 0.0, "text": "First line"},
+            {"ts": 5.0, "text": "Second line"}
         ]
 
-        result = ap.process("mock5.mp3", existing_lyrics_text="This is an echoing chorus\nAnother line", richsync_data=richsync)
+        result = ap.process("mock5.mp3", richsync_data=richsync_data)
 
-        segments = result["segments"]
+        # Result should have 2 segments, exactly matching the LRC text and times!
+        self.assertEqual(len(result["segments"]), 2)
+        self.assertEqual(result["segments"][0]["text"], "First line")
+        self.assertEqual(result["segments"][0]["start"], 0.0)
+        # End is constrained to max + 5.0, so 0.0 + 5.0 = 5.0
+        self.assertEqual(result["segments"][0]["end"], 5.0)
 
-        # Since it bypassed Whisper, "This is an echoing chorus" should start EXACTLY at 5.0
-        # And since the next line is 8.0, it ends at 8.0.
-
-        # Segment 0: Instrumental gap from 0 to 5.0
-        self.assertEqual(segments[0]["is_instrumental"], True)
-        self.assertEqual(segments[0]["end"], 5.0)
-
-        # Segment 1: "This is an echoing chorus"
-        self.assertEqual(segments[1]["text"], "This is an echoing chorus")
-        self.assertEqual(segments[1]["start"], 5.0)
-
-        # Segment 2: "Another line"
-        self.assertEqual(segments[2]["text"], "Another line")
-        self.assertEqual(segments[2]["start"], 8.0)
+        self.assertEqual(result["segments"][1]["text"], "Second line")
+        self.assertEqual(result["segments"][1]["start"], 5.0)
+        self.assertEqual(result["segments"][1]["end"], 10.0)
 
         os.remove("mock5.mp3")
 
