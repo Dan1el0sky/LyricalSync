@@ -46,7 +46,7 @@ class AudioProcessor:
 
         final_segments = []
 
-        if existing_lyrics_text:
+        if existing_lyrics_text or richsync_data:
             if progress_store and video_id:
                 progress_store[video_id] = {"status": "Aligning lyrics with Stable Whisper...", "percent": 75}
             print("Force aligning existing lyrics using Stable Whisper...")
