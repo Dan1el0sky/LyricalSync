@@ -122,67 +122,103 @@ class AudioProcessor:
 
                 # Do NOT use vad=True for align(), it aggressively removes silence frames which
                 # desyncs the audio timeline and causes "Failed to align the last X words" errors!
-                # Using fast_mode=True allows the DTW to bridge large instrumental gaps safely.
+                # Using fast_mode=True can sometimes cause dropped segments on extremely long gaps.
+                # However, it is required for speed and avoiding OOM on 4GB VRAM.
+                # We will handle the output carefully.
                 result = self.model.align(waveform, text_to_align, language=detected_lang, vad=False, fast_mode=True)
 
                 for segment in result.segments:
+                    # If stable_whisper failed to align this segment (empty words list), skip it to prevent crash.
+                    if not getattr(segment, 'words', None):
+                        continue
+
                     # To prevent a single sentence from spanning a 15-second gap like in "As It Was",
                     # we will detect if the gap BETWEEN two consecutive words is > 4.0 seconds,
                     # and if so, split the segment there.
 
                     current_seg_words = []
-                current_seg_start = segment.words[0].start if segment.words else segment.start
+                    current_seg_start = segment.words[0].start if getattr(segment, 'words', None) else segment.start
 
-                for i, word in enumerate(segment.words):
-                    w_text = word.word.strip()
-                    if not w_text:
-                        continue
+                    for i, word in enumerate(segment.words):
+                        w_text = word.word.strip()
+                        if not w_text:
+                            continue
 
-                    # Apply global offset (-0.2s) to fix Whisper feeling "late"
-                    global_offset = -0.2
-                    w_start = max(0.0, word.start + global_offset)
-                    w_end = max(0.0, word.end + global_offset)
+                        # Apply global offset (-0.2s) to fix Whisper feeling "late"
+                        global_offset = -0.2
+                        w_start = max(0.0, word.start + global_offset)
+                        w_end = max(0.0, word.end + global_offset)
 
-                    # Look back to the previous word
-                    prev_end = current_seg_words[-1]["end"] if current_seg_words else segment.start
+                        # Look back to the previous word
+                        prev_end = current_seg_words[-1]["end"] if current_seg_words else segment.start
 
-                    # Look ahead to the next valid word in the segment
-                    next_start = None
-                    for j in range(i + 1, len(segment.words)):
-                        if segment.words[j].word.strip():
-                            next_start = segment.words[j].start
-                            break
+                        # Look ahead to the next valid word in the segment
+                        next_start = None
+                        for j in range(i + 1, len(segment.words)):
+                            if segment.words[j].word.strip():
+                                next_start = segment.words[j].start
+                                break
 
-                    # Fix for "oooooh" where the "o" is long but Whisper only aligned the short "h" ending.
-                    # If this word is short (< 0.5s), but there's a significant gap (> 0.5s) BEFORE it,
-                    # stretch the word's start time backwards into the gap to capture the vowel note.
-                    if w_end - w_start < 0.5 and (w_start - prev_end) > 0.5:
-                        # Don't stretch backwards more than 3.0 seconds to prevent weird UI artifacts
-                        w_start = max(prev_end + 0.1, w_start - 3.0)
+                        # Fix for "oooooh" where the "o" is long but Whisper only aligned the short "h" ending.
+                        # If this word is short (< 0.5s), but there's a significant gap (> 0.5s) BEFORE it,
+                        # stretch the word's start time backwards into the gap to capture the vowel note.
+                        if w_end - w_start < 0.5 and (w_start - prev_end) > 0.5:
+                            # Don't stretch backwards more than 3.0 seconds to prevent weird UI artifacts
+                            w_start = max(prev_end + 0.1, w_start - 3.0)
 
-                    # Smooth out extremely fast, skipped, or flashed words by filling the gap slightly forward
-                    if w_end - w_start < 0.2:
-                        pad_target = w_start + 0.3
-                        if next_start is not None and pad_target > next_start:
-                            w_end = max(w_end, next_start - 0.05)
-                        else:
-                            w_end = max(w_end, pad_target)
+                        # Smooth out extremely fast, skipped, or flashed words by filling the gap slightly forward
+                        if w_end - w_start < 0.2:
+                            pad_target = w_start + 0.3
+                            if next_start is not None and pad_target > next_start:
+                                w_end = max(w_end, next_start - 0.05)
+                            else:
+                                w_end = max(w_end, pad_target)
 
-                    # If a word extends massively into an instrumental gap (e.g. stretching 10 seconds),
-                    # we only cap it if the next word is more than 5.0 seconds away to preserve long 6-second held notes like "Ohhh"
-                    if next_start is not None and next_start - w_start > 5.0:
-                        if w_end - w_start > 2.0:
-                            # It's highly likely stretching erroneously across the gap
-                            w_end = w_start + 2.0
-                    elif next_start is None:
-                        # Last word of the segment
-                        if w_end - w_start > 3.0:
-                            # If it's the very last word of a sentence, cap the tail to 2.0s
-                            w_end = w_start + 2.0
+                        # If a word extends massively into an instrumental gap (e.g. stretching 10 seconds),
+                        # we only cap it if the next word is more than 5.0 seconds away to preserve long 6-second held notes like "Ohhh"
+                        if next_start is not None and next_start - w_start > 5.0:
+                            if w_end - w_start > 2.0:
+                                # It's highly likely stretching erroneously across the gap
+                                w_end = w_start + 2.0
+                        elif next_start is None:
+                            # Last word of the segment
+                            if w_end - w_start > 3.0:
+                                # If it's the very last word of a sentence, cap the tail to 2.0s
+                                w_end = w_start + 2.0
 
-                    # If there's a huge gap before this word, push the previous words as a segment and start fresh
-                    if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
-                        # Ensure we don't end exactly at start time (causes zero duration)
+                        # If there's a huge gap before this word, push the previous words as a segment and start fresh
+                        if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                            # Ensure we don't end exactly at start time (causes zero duration)
+                            seg_end = current_seg_words[-1]["end"]
+                            if seg_end <= current_seg_start:
+                                seg_end = current_seg_start + 0.1
+                            final_segments.append({
+                                "start": current_seg_start,
+                                "end": seg_end,
+                                "text": " ".join([w["word"] for w in current_seg_words]),
+                                "words": current_seg_words
+                            })
+                            current_seg_words = []
+                            current_seg_start = w_start
+
+                        word_dict = {
+                            "word": w_text,
+                            "start": w_start,
+                            "end": w_end,
+                            "chars": []
+                        }
+
+                        w_dur = w_end - w_start
+                        c_dur = w_dur / len(w_text)
+                        for idx_c, c in enumerate(w_text):
+                            word_dict["chars"].append({
+                                "char": c,
+                                "start": w_start + idx_c * c_dur,
+                                "end": w_start + (idx_c + 1) * c_dur
+                            })
+                        current_seg_words.append(word_dict)
+
+                    if current_seg_words:
                         seg_end = current_seg_words[-1]["end"]
                         if seg_end <= current_seg_start:
                             seg_end = current_seg_start + 0.1
@@ -192,36 +228,6 @@ class AudioProcessor:
                             "text": " ".join([w["word"] for w in current_seg_words]),
                             "words": current_seg_words
                         })
-                        current_seg_words = []
-                        current_seg_start = w_start
-
-                    word_dict = {
-                        "word": w_text,
-                        "start": w_start,
-                        "end": w_end,
-                        "chars": []
-                    }
-
-                    w_dur = w_end - w_start
-                    c_dur = w_dur / len(w_text)
-                    for idx_c, c in enumerate(w_text):
-                        word_dict["chars"].append({
-                            "char": c,
-                            "start": w_start + idx_c * c_dur,
-                            "end": w_start + (idx_c + 1) * c_dur
-                        })
-                    current_seg_words.append(word_dict)
-
-                if current_seg_words:
-                    seg_end = current_seg_words[-1]["end"]
-                    if seg_end <= current_seg_start:
-                        seg_end = current_seg_start + 0.1
-                    final_segments.append({
-                        "start": current_seg_start,
-                        "end": seg_end,
-                        "text": " ".join([w["word"] for w in current_seg_words]),
-                        "words": current_seg_words
-                    })
 
         else:
             if progress_store and video_id:

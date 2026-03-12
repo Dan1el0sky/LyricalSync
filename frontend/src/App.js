@@ -604,17 +604,17 @@ function App() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between h-full pt-1">
+            <div className="flex items-center justify-between h-full pt-1 relative">
               {/* Left: Mobile/Compact Info */}
-              <div className="flex items-center gap-4 w-1/3">
-                <img src={currentSong.thumbnail} alt="cover" className="w-12 h-12 rounded-xl object-cover shadow-md border border-white/10 lg:hidden" />
+              <div className="flex items-center gap-4 z-10 w-1/4 sm:w-1/3">
+                <img src={currentSong.thumbnail} alt="cover" className="w-12 h-12 rounded-xl object-cover shadow-md border border-white/10 lg:hidden shrink-0" />
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-bold text-white/50 w-12 font-mono tracking-wider">{formatTime(currentTime)}</span>
                 </div>
               </div>
 
-              {/* Center: Controls */}
-              <div className="flex items-center justify-center gap-6 w-1/3">
+              {/* Center: Controls (Absolutely Positioned for Perfect Centering) */}
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center gap-4 sm:gap-6 z-20">
                 <button
                   onClick={skipBackward}
                   className={`transition-colors active:scale-95 ${queueIndex > 0 || currentTime > 3 ? 'text-white hover:text-fuchsia-400' : 'text-white/20 cursor-not-allowed'}`}
@@ -624,7 +624,7 @@ function App() {
 
                 <button
                   onClick={togglePlay}
-                  className="w-14 h-14 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)]"
+                  className="w-14 h-14 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.3)] hover:shadow-[0_0_30px_rgba(255,255,255,0.5)] shrink-0"
                 >
                   {isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
                 </button>
@@ -638,19 +638,19 @@ function App() {
               </div>
 
               {/* Right: Volume & Time & Queue Toggle */}
-              <div className="w-1/3 flex justify-end items-center gap-4">
-                <span className="text-xs font-bold text-white/50 font-mono tracking-wider">{formatTime(duration)}</span>
+              <div className="flex justify-end items-center gap-3 sm:gap-4 z-10 w-1/4 sm:w-1/3">
+                <span className="text-xs font-bold text-white/50 font-mono tracking-wider hidden sm:block">{formatTime(duration)}</span>
 
                 <button
                   onClick={() => setShowQueue(!showQueue)}
-                  className={`p-2 rounded-full transition-colors ${showQueue ? 'bg-fuchsia-500/20 text-fuchsia-400' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'}`}
+                  className={`p-2 rounded-full transition-colors shrink-0 ${showQueue ? 'bg-fuchsia-500/20 text-fuchsia-400' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'}`}
                   title="Queue"
                 >
                   <ListMusic size={18} />
                 </button>
 
-                <div className="hidden sm:flex items-center gap-2 w-28 group/vol relative">
-                  <Volume2 className="text-white/50 group-hover/vol:text-white/80 transition-colors" size={18} />
+                <div className="hidden lg:flex items-center gap-2 w-28 group/vol relative">
+                  <Volume2 className="text-white/50 group-hover/vol:text-white/80 transition-colors shrink-0" size={18} />
                   <input
                     type="range"
                     min="0"
