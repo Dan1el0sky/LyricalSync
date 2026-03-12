@@ -120,8 +120,10 @@ class AudioProcessor:
                 detected_lang = max(probs, key=probs.get)
                 print(f"Detected language: {detected_lang}")
 
-                # Enable VAD (Voice Activity Detection) so Whisper correctly skips instrumental breaks instead of stretching words!
-                result = self.model.align(waveform, text_to_align, language=detected_lang, vad=True)
+                # Do NOT use vad=True for align(), it aggressively removes silence frames which
+                # desyncs the audio timeline and causes "Failed to align the last X words" errors!
+                # Using fast_mode=True allows the DTW to bridge large instrumental gaps safely.
+                result = self.model.align(waveform, text_to_align, language=detected_lang, vad=False, fast_mode=True)
 
                 for segment in result.segments:
                     # To prevent a single sentence from spanning a 15-second gap like in "As It Was",

@@ -41,7 +41,7 @@ class TestAudioProcessorGaps(unittest.TestCase):
             def detect_language(self, mel):
                 return None, {'en': 1.0}
 
-            def align(self, audio, text, language=None, vad=False):
+            def align(self, audio, text, language=None, vad=False, fast_mode=False):
                 return MockResult()
 
         ap.model = MockModel()

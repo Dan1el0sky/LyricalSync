@@ -35,7 +35,7 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
             def detect_language(self, mel):
                 return None, {'en': 1.0}
 
-            def align(self, audio, text, language=None, vad=False):
+            def align(self, audio, text, language=None, vad=False, fast_mode=False):
                 return MockResult()
             def transcribe(self, audio, language=None, word_timestamps=True, vad=False):
                 return MockResult()
