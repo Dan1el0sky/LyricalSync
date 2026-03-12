@@ -105,9 +105,23 @@ class AudioProcessor:
             else:
                 text_to_align = existing_lyrics_text
 
-                # Allow Stable-Whisper to auto-detect language for bilingual songs (e.g. ROSÉ APT. Korean+English).
+                # model.align REQUIRES a language. We can use whisper's built-in language detection on the first 30s
+                # to figure out if it's Korean, English, etc.
+                import whisper
+
+                # Create a padded/trimmed 30s chunk to detect language
+                audio_for_lang = whisper.pad_or_trim(waveform.flatten())
+
+                # Make log-Mel spectrogram and move to the same device as the model
+                mel = whisper.log_mel_spectrogram(audio_for_lang, n_mels=self.model.dims.n_mels if hasattr(self.model, 'dims') else 80).to(self.model.device)
+
+                # Detect the spoken language
+                _, probs = self.model.detect_language(mel)
+                detected_lang = max(probs, key=probs.get)
+                print(f"Detected language: {detected_lang}")
+
                 # Enable VAD (Voice Activity Detection) so Whisper correctly skips instrumental breaks instead of stretching words!
-                result = self.model.align(waveform, text_to_align, language=None, vad=True)
+                result = self.model.align(waveform, text_to_align, language=detected_lang, vad=True)
 
                 for segment in result.segments:
                     # To prevent a single sentence from spanning a 15-second gap like in "As It Was",

@@ -36,6 +36,11 @@ class TestAudioProcessorGaps(unittest.TestCase):
                 self.segments = [MockSegment()]
 
         class MockModel:
+            def __init__(self):
+                self.device = torch.device('cpu')
+            def detect_language(self, mel):
+                return None, {'en': 1.0}
+
             def align(self, audio, text, language=None, vad=False):
                 return MockResult()
 
