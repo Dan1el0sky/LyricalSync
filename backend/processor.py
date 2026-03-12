@@ -105,25 +105,29 @@ class AudioProcessor:
             else:
                 text_to_align = existing_lyrics_text
 
-                # model.align REQUIRES a language. We can use whisper's built-in language detection on the first 30s
-                # to figure out if it's Korean, English, etc.
                 import whisper
-
-                # Create a padded/trimmed 30s chunk to detect language
                 audio_for_lang = whisper.pad_or_trim(waveform.flatten())
-
-                # Make log-Mel spectrogram and move to the same device as the model
                 mel = whisper.log_mel_spectrogram(audio_for_lang, n_mels=self.model.dims.n_mels if hasattr(self.model, 'dims') else 80).to(self.model.device)
-
-                # Detect the spoken language
                 _, probs = self.model.detect_language(mel)
                 detected_lang = max(probs, key=probs.get)
                 print(f"Detected language: {detected_lang}")
 
-                # Do NOT use vad=True for align(), it aggressively removes silence frames which
-                # desyncs the audio timeline and causes "Failed to align the last X words" errors!
-                # Using fast_mode=True allows the DTW to bridge large instrumental gaps safely.
                 result = self.model.align(waveform, text_to_align, language=detected_lang, vad=False, fast_mode=True)
+
+                # VERIFY ALIGNMENT SUCCESS:
+                # If stable-whisper fails to align the text (e.g. throws "26/27 segments failed to align"),
+                # it will return very few words compared to the input text.
+                expected_words = len(text_to_align.split())
+                aligned_words_count = sum(len(s.words) for s in result.segments)
+
+                if expected_words > 0 and aligned_words_count < (expected_words * 0.5):
+                    print(f"Catastrophic alignment failure detected (Aligned {aligned_words_count}/{expected_words} words). Falling back to full transcription...")
+                    if progress_store and video_id:
+                        progress_store[video_id] = {"status": "Alignment failed. Transcribing audio...", "percent": 80}
+
+                    # Fallback to transcribe using the previously detected language to help accuracy,
+                    # and pass the original text as an initial prompt!
+                    result = self.model.transcribe(waveform, language=detected_lang, word_timestamps=True, vad=True, initial_prompt=text_to_align[:1000])
 
                 for segment in result.segments:
                     # To prevent a single sentence from spanning a 15-second gap like in "As It Was",
