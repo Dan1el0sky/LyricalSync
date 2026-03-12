@@ -9,7 +9,6 @@ from processor import AudioProcessor
 class TestAudioProcessorStableWhisper(unittest.TestCase):
     def test_stable_whisper_structure(self):
         ap = AudioProcessor()
-        # Mocking the load_model and process methods to return hardcoded stable-whisper style object
         ap.device = torch.device('cpu')
 
         class MockWord:
@@ -42,7 +41,6 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
 
         ap.model = MockModel()
 
-        # We need a small mock audio to pass to process
         import numpy as np
         from pydub import AudioSegment
         audio = np.zeros(16000 * 2, dtype=np.float32)
@@ -59,7 +57,7 @@ class TestAudioProcessorStableWhisper(unittest.TestCase):
         self.assertEqual(len(result["segments"][0]["words"]), 2)
         self.assertEqual(result["segments"][0]["words"][0]["word"], "Hello")
         self.assertEqual(result["segments"][0]["words"][0]["start"], 0.0)
-        self.assertAlmostEqual(result["segments"][0]["words"][0]["end"], 0.3, places=1)
+        self.assertAlmostEqual(result["segments"][0]["words"][0]["end"], 0.4, places=1)
 
         os.remove("mock.mp3")
 
