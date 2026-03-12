@@ -1,138 +1,24 @@
 import os
-# Force PyTorch and torchaudio to download the huge 1.18GB models to the local project folder
-# instead of the user's C:\Users\...\.cache\ directory.
-os.environ["TORCH_HOME"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-
 import torch
-import torchaudio
 import json
 import re
 from unidecode import unidecode
-from torchaudio.pipelines import MMS_FA
+import stable_whisper
 
 class AudioProcessor:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bundle = MMS_FA
         self.model = None
-        self.labels = None
-        self.dictionary = None
 
     def load_model(self):
         if not self.model:
-            print(f"Loading torchaudio MMS Forced Alignment model on {self.device}...")
-            self.model = self.bundle.get_model()
-            self.model.to(self.device)
-            self.labels = self.bundle.get_labels(star="*")
-            self.dictionary = self.bundle.get_dict(star="*")
-
-    def compute_alignments(self, emission, transcript, dictionary):
-        targets = torch.tensor([dictionary[c] for c in transcript], dtype=torch.int32)
-        alignments, scores = torchaudio.functional.forced_align(emission, targets, blank=0)
-        return alignments, scores
-
-    def _clean_text(self, text):
-        text = unidecode(text).lower()
-        text = re.sub(r'[^a-z0-9 ]', '', text)
-        return text.strip()
-
-    def _align_words(self, waveform, sample_rate, words, offset_time=0.0):
-        if sample_rate != self.bundle.sample_rate:
-            resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=self.bundle.sample_rate)
-            waveform = resampler(waveform)
-
-        with torch.inference_mode():
-            emission, _ = self.model(waveform.to(self.device))
-        emission = emission[0].cpu() # shape (frames, num_labels)
-
-        transcript = []
-        word_spans = []
-
-        for w in words:
-            cleaned = self._clean_text(w)
-            if not cleaned: continue
-
-            span_start = len(transcript)
-            for c in cleaned:
-                if c in self.dictionary:
-                    transcript.append(c)
-            transcript.append('*')
-            span_end = len(transcript)
-
-            word_spans.append({
-                "word": w,
-                "clean": cleaned,
-                "start_idx": span_start,
-                "end_idx": span_end - 1
-            })
-
-        if not transcript:
-            return []
-
-        try:
-            alignments, scores = self.compute_alignments(emission, transcript, self.dictionary)
-            alignments = alignments[0]
-        except Exception as e:
-            print("Forced alignment chunk failed, returning evenly spaced timings. Error:", e)
-            return self._fake_align(words, waveform.shape[1]/self.bundle.sample_rate, offset_time)
-
-        frame_dur = 1.0 / 50.0
-
-        aligned_words = []
-        for span in word_spans:
-            if span["clean"] == "": continue
-
-            start_frame = None
-            end_frame = None
-            char_timings = []
-
-            for idx in range(span["start_idx"], span["end_idx"]):
-                token_frames = (alignments == idx).nonzero(as_tuple=True)[0]
-                if len(token_frames) > 0:
-                    c_start = (token_frames[0].item() * frame_dur) + offset_time
-                    c_end = ((token_frames[-1].item() + 1) * frame_dur) + offset_time
-                    if start_frame is None: start_frame = c_start
-                    end_frame = c_end
-
-                    char_timings.append({
-                        "char": transcript[idx],
-                        "start": c_start,
-                        "end": c_end
-                    })
-
-            if start_frame is not None and end_frame is not None:
-                aligned_words.append({
-                    "word": span["word"],
-                    "start": start_frame,
-                    "end": end_frame,
-                    "chars": char_timings
-                })
-
-        return aligned_words
-
-    def _fake_align(self, words, duration, offset_time=0.0):
-        total_chars = sum(len(w) for w in words)
-        char_dur = duration / total_chars if total_chars > 0 else 0
-
-        aligned_words = []
-        current_time = offset_time
-        for w in words:
-            w_start = current_time
-            char_timings = []
-            for c in w:
-                char_timings.append({"char": c, "start": current_time, "end": current_time + char_dur})
-                current_time += char_dur
-            aligned_words.append({
-                "word": w,
-                "start": w_start,
-                "end": current_time,
-                "chars": char_timings
-            })
-        return aligned_words
+            print(f"Loading Stable Whisper model on {self.device}...")
+            # Use 'base' or 'small' depending on accuracy vs speed requirements
+            self.model = stable_whisper.load_model('base', device=self.device.type)
 
     def process(self, audio_path, existing_lyrics_text=None, richsync_data=None, video_id=None, progress_store=None):
         if progress_store and video_id:
-            progress_store[video_id] = {"status": "Loading audio processing model...", "percent": 55}
+            progress_store[video_id] = {"status": "Loading Stable Whisper model...", "percent": 55}
         self.load_model()
 
         print(f"Processing {audio_path}...")
@@ -143,229 +29,276 @@ class AudioProcessor:
 
         try:
             audio = AudioSegment.from_file(audio_path)
-            sample_rate = audio.frame_rate
-
-            # Convert to mono
+            # stable-whisper expects 16kHz mono float32 numpy array
+            if audio.frame_rate != 16000:
+                audio = audio.set_frame_rate(16000)
             if audio.channels > 1:
                 audio = audio.set_channels(1)
 
-            # Convert to raw data
             samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-
-            # Normalize to [-1.0, 1.0]
             max_val = np.abs(samples).max()
             if max_val > 0:
                 samples = samples / max_val
-
-            waveform = torch.from_numpy(samples).unsqueeze(0) # shape: (1, samples)
-
+            waveform = samples
         except Exception as e:
             print(f"Error loading audio via pydub: {e}")
             raise e
 
         final_segments = []
 
-        if existing_lyrics_text:
+        if existing_lyrics_text or richsync_data:
             if progress_store and video_id:
-                progress_store[video_id] = {"status": "Force aligning lyrics...", "percent": 65}
-            print("Force aligning existing lyrics using torchaudio MMS_FA (chunked to save memory/prevent lag)...")
+                progress_store[video_id] = {"status": "Aligning lyrics with Stable Whisper...", "percent": 75}
+            print("Force aligning existing lyrics using Stable Whisper...")
 
-            # Total audio duration
-            total_duration = waveform.shape[1] / sample_rate
-
-            chunks_to_process = []
-
-            # Strategy 1: Use exact Musixmatch phrase timings to chunk the audio
+            # Strategy 1: We have perfectly human-synced LRC line timestamps!
             if richsync_data:
-                print("Richsync data found! Chunking audio exactly by phrase timestamps...")
+                print("Richsync LRC data found! overriding whisper segments completely to fix echo/chorus misalignment...")
+
+                # We know the exact start time of each line. We will uniformly distribute the words
+                # inside the line until the next line starts (or a max of 5 seconds later).
+                # This guarantees the chorus and echoes perfectly sync to the human-made LRC file!
                 for i, line_data in enumerate(richsync_data):
                     start_ts = line_data.get("ts", 0.0)
-                    end_ts = line_data.get("te", 0.0)
                     text = line_data.get("text", "").strip()
                     if not text: continue
 
-                    # If Musixmatch didn't give an end timestamp for the phrase, guess based on next phrase
-                    if end_ts == 0.0 or end_ts <= start_ts:
-                        if i + 1 < len(richsync_data):
-                            end_ts = richsync_data[i+1].get("ts", start_ts + 5.0)
-                        else:
-                            end_ts = total_duration
-
-                    # Add slight padding so we don't clip words on the absolute edge
-                    pad = 0.5
-                    c_start = max(0.0, start_ts - pad)
-                    c_end = min(total_duration, end_ts + pad)
-
-                    chunks_to_process.append({
-                        "text": text,
-                        "start_sec": c_start,
-                        "end_sec": c_end,
-                        "offset": c_start
-                    })
-
-            # Strategy 2: We only have plain text. Use Whisper to find timestamps, then align words exactly.
-            else:
-                if progress_store and video_id:
-                    progress_store[video_id] = {"status": "Transcribing audio to find safe chunks...", "percent": 75}
-                print("No richsync found. Transcribing audio with Whisper to find safe chunks to align...")
-
-                import whisper_timestamped as whisper
-                w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
-                w_audio = whisper.load_audio(audio_path)
-                results = whisper.transcribe(w_model, w_audio, language="en")
-
-                # Create chunks based on whisper segments
-                chunk_duration_target = 30.0
-                current_chunk_segments = []
-                current_chunk_start = 0.0
-
-                lines = [l.strip() for l in existing_lyrics_text.split('\n') if l.strip()]
-                whisper_segments = results.get("segments", [])
-
-                # Match whisper segments to the plain text lyrics lines
-                # Simply chunk the lyrics text based on duration matching the segments
-
-                total_words = sum(len(line.split()) for line in lines)
-                words_per_sec = total_words / total_duration if total_duration > 0 else 1
-
-                current_line_idx = 0
-
-                for segment in whisper_segments:
-                    seg_start = segment["start"]
-                    seg_end = segment["end"]
-
-                    if len(current_chunk_segments) == 0:
-                        current_chunk_start = seg_start
-
-                    current_chunk_segments.append(segment)
-
-                    if seg_end - current_chunk_start >= chunk_duration_target:
-                        chunk_expected_words = int((seg_end - current_chunk_start) * words_per_sec)
-                        chunk_lines = []
-                        chunk_words_count = 0
-
-                        while current_line_idx < len(lines):
-                            line = lines[current_line_idx]
-                            w_count = len(line.split())
-                            if chunk_words_count + w_count > chunk_expected_words * 1.5 and chunk_lines:
-                                break
-                            chunk_lines.append(line)
-                            chunk_words_count += w_count
-                            current_line_idx += 1
-
-                        if chunk_lines:
-                            # Pad slightly to allow word boundary freedom
-                            pad = 0.5
-                            chunks_to_process.append({
-                                "text": " \n ".join(chunk_lines), # Use newline to keep track later
-                                "start_sec": max(0.0, current_chunk_start - pad),
-                                "end_sec": min(total_duration, seg_end + pad),
-                                "offset": max(0.0, current_chunk_start - pad)
-                            })
-
-                        current_chunk_segments = []
-
-                # Append left overs
-                if current_chunk_segments or current_line_idx < len(lines):
-                    chunk_lines = []
-                    while current_line_idx < len(lines):
-                        chunk_lines.append(lines[current_line_idx])
-                        current_line_idx += 1
-
-                    if not current_chunk_segments:
-                        start_sec = max(0.0, total_duration - 10.0)
-                        end_sec = total_duration
+                    if i + 1 < len(richsync_data):
+                        end_ts = richsync_data[i+1].get("ts", start_ts + 5.0)
                     else:
-                        start_sec = max(0.0, current_chunk_start - 0.5)
-                        end_sec = total_duration
+                        end_ts = start_ts + 5.0
 
-                    if chunk_lines:
-                        chunks_to_process.append({
-                            "text": " \n ".join(chunk_lines),
-                            "start_sec": start_sec,
-                            "end_sec": end_sec,
-                            "offset": start_sec
-                        })
+                    # We don't want lines dragging into massive gaps
+                    end_ts = min(end_ts, start_ts + 7.0)
 
+                    # Split into words and distribute evenly
+                    words = text.split()
+                    w_dur = (end_ts - start_ts) / len(words) if words else 0
 
-            # Execute chunked alignments
-            total_chunks = len(chunks_to_process)
-            for chunk_idx, chunk in enumerate(chunks_to_process):
-                if progress_store and video_id:
-                    progress_store[video_id] = {"status": f"Aligning chunk {chunk_idx + 1}/{total_chunks}...", "percent": 75 + int((chunk_idx / total_chunks) * 20)}
-                start_sample = int(chunk["start_sec"] * sample_rate)
-                end_sample = int(chunk["end_sec"] * sample_rate)
-                chunk_waveform = waveform[:, start_sample:end_sample]
+                    current_seg_words = []
+                    for w_idx, w in enumerate(words):
+                        w_start = start_ts + w_idx * w_dur
+                        w_end = w_start + w_dur
 
-                lines_in_chunk = chunk["text"].split(" \n ")
-                all_words = []
-                word_to_line = {}
-                word_idx = 0
-
-                for line_idx, line in enumerate(lines_in_chunk):
-                    words = line.strip().split()
-                    for w in words:
-                        all_words.append(w)
-                        word_to_line[word_idx] = line_idx
-                        word_idx += 1
-
-                aligned_words = self._align_words(chunk_waveform, sample_rate, all_words, offset_time=chunk["offset"])
-
-                lines_data = {}
-                for i, aw in enumerate(aligned_words):
-                    if i >= len(word_to_line): break
-                    l_idx = word_to_line[i]
-                    if l_idx not in lines_data:
-                        lines_data[l_idx] = {
-                            "text": lines_in_chunk[l_idx],
-                            "start": aw["start"],
-                            "end": aw["end"],
-                            "words": []
+                        word_dict = {
+                            "word": w,
+                            "start": w_start,
+                            "end": w_end,
+                            "chars": []
                         }
-                    lines_data[l_idx]["words"].append(aw)
-                    lines_data[l_idx]["end"] = aw["end"]
 
-                for l_idx in sorted(lines_data.keys()):
-                    final_segments.append(lines_data[l_idx])
+                        c_dur = w_dur / len(w) if len(w) > 0 else 0
+                        for idx_c, c in enumerate(w):
+                            word_dict["chars"].append({
+                                "char": c,
+                                "start": w_start + idx_c * c_dur,
+                                "end": w_start + (idx_c + 1) * c_dur
+                            })
+                        current_seg_words.append(word_dict)
+
+                    final_segments.append({
+                        "start": start_ts,
+                        "end": end_ts,
+                        "text": text,
+                        "words": current_seg_words
+                    })
+            else:
+                text_to_align = existing_lyrics_text
+
+                # model.align REQUIRES a language. We can use whisper's built-in language detection on the first 30s
+                # to figure out if it's Korean, English, etc.
+                import whisper
+
+                # Create a padded/trimmed 30s chunk to detect language
+                audio_for_lang = whisper.pad_or_trim(waveform.flatten())
+
+                # Make log-Mel spectrogram and move to the same device as the model
+                mel = whisper.log_mel_spectrogram(audio_for_lang, n_mels=self.model.dims.n_mels if hasattr(self.model, 'dims') else 80).to(self.model.device)
+
+                # Detect the spoken language
+                _, probs = self.model.detect_language(mel)
+                detected_lang = max(probs, key=probs.get)
+                print(f"Detected language: {detected_lang}")
+
+                # Do NOT use vad=True for align(), it aggressively removes silence frames which
+                # desyncs the audio timeline and causes "Failed to align the last X words" errors!
+                # Using fast_mode=True allows the DTW to bridge large instrumental gaps safely.
+                result = self.model.align(waveform, text_to_align, language=detected_lang, vad=False, fast_mode=True)
+
+                for segment in result.segments:
+                    # To prevent a single sentence from spanning a 15-second gap like in "As It Was",
+                    # we will detect if the gap BETWEEN two consecutive words is > 4.0 seconds,
+                    # and if so, split the segment there.
+
+                    current_seg_words = []
+                current_seg_start = segment.words[0].start if segment.words else segment.start
+
+                for i, word in enumerate(segment.words):
+                    w_text = word.word.strip()
+                    if not w_text:
+                        continue
+
+                    # Apply global offset (-0.2s) to fix Whisper feeling "late"
+                    global_offset = -0.2
+                    w_start = max(0.0, word.start + global_offset)
+                    w_end = max(0.0, word.end + global_offset)
+
+                    # Look back to the previous word
+                    prev_end = current_seg_words[-1]["end"] if current_seg_words else segment.start
+
+                    # Look ahead to the next valid word in the segment
+                    next_start = None
+                    for j in range(i + 1, len(segment.words)):
+                        if segment.words[j].word.strip():
+                            next_start = segment.words[j].start
+                            break
+
+                    # Fix for "oooooh" where the "o" is long but Whisper only aligned the short "h" ending.
+                    # If this word is short (< 0.5s), but there's a significant gap (> 0.5s) BEFORE it,
+                    # stretch the word's start time backwards into the gap to capture the vowel note.
+                    if w_end - w_start < 0.5 and (w_start - prev_end) > 0.5:
+                        # Don't stretch backwards more than 3.0 seconds to prevent weird UI artifacts
+                        w_start = max(prev_end + 0.1, w_start - 3.0)
+
+                    # Smooth out extremely fast, skipped, or flashed words by filling the gap slightly forward
+                    if w_end - w_start < 0.2:
+                        pad_target = w_start + 0.3
+                        if next_start is not None and pad_target > next_start:
+                            w_end = max(w_end, next_start - 0.05)
+                        else:
+                            w_end = max(w_end, pad_target)
+
+                    # If a word extends massively into an instrumental gap (e.g. stretching 10 seconds),
+                    # we only cap it if the next word is more than 5.0 seconds away to preserve long 6-second held notes like "Ohhh"
+                    if next_start is not None and next_start - w_start > 5.0:
+                        if w_end - w_start > 2.0:
+                            # It's highly likely stretching erroneously across the gap
+                            w_end = w_start + 2.0
+                    elif next_start is None:
+                        # Last word of the segment
+                        if w_end - w_start > 3.0:
+                            # If it's the very last word of a sentence, cap the tail to 2.0s
+                            w_end = w_start + 2.0
+
+                    # If there's a huge gap before this word, push the previous words as a segment and start fresh
+                    if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        final_segments.append({
+                            "start": current_seg_start,
+                            "end": current_seg_words[-1]["end"],
+                            "text": " ".join([w["word"] for w in current_seg_words]),
+                            "words": current_seg_words
+                        })
+                        current_seg_words = []
+                        current_seg_start = w_start
+
+                    word_dict = {
+                        "word": w_text,
+                        "start": w_start,
+                        "end": w_end,
+                        "chars": []
+                    }
+
+                    w_dur = w_end - w_start
+                    c_dur = w_dur / len(w_text)
+                    for idx_c, c in enumerate(w_text):
+                        word_dict["chars"].append({
+                            "char": c,
+                            "start": w_start + idx_c * c_dur,
+                            "end": w_start + (idx_c + 1) * c_dur
+                        })
+                    current_seg_words.append(word_dict)
+
+                if current_seg_words:
+                    final_segments.append({
+                        "start": current_seg_start,
+                        "end": current_seg_words[-1]["end"],
+                        "text": " ".join([w["word"] for w in current_seg_words]),
+                        "words": current_seg_words
+                    })
 
         else:
             if progress_store and video_id:
                 progress_store[video_id] = {"status": "No lyrics found. Transcribing audio...", "percent": 60}
-            print("No lyrics provided! Falling back to fast whisper transcription...")
-            import whisper_timestamped as whisper
-            w_model = whisper.load_model("base", device="cpu" if self.device.type=="cpu" else "cuda")
-            w_audio = whisper.load_audio(audio_path)
-            results = whisper.transcribe(w_model, w_audio, language="en")
+            print("No lyrics provided! Transcribing audio with Stable Whisper...")
 
-            for segment in results["segments"]:
-                seg_dict = {
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "text": segment["text"].strip(),
-                    "words": []
-                }
-                if "words" in segment:
-                    for word in segment["words"]:
-                        char_timings = []
-                        w_text = word["text"]
-                        w_dur = word["end"] - word["start"]
-                        c_dur = w_dur / len(w_text) if len(w_text) > 0 else 0
-                        for i, c in enumerate(w_text):
-                            char_timings.append({
-                                "char": c,
-                                "start": word["start"] + i * c_dur,
-                                "end": word["start"] + (i + 1) * c_dur
-                            })
+            # Allow auto-language detection and use VAD to ignore instrumental sections.
+            result = self.model.transcribe(waveform, language=None, word_timestamps=True, vad=True)
 
-                        word_dict = {
-                            "word": w_text,
-                            "start": word["start"],
-                            "end": word["end"],
-                            "chars": char_timings
-                        }
-                        seg_dict["words"].append(word_dict)
-                final_segments.append(seg_dict)
+            for segment in result.segments:
+                current_seg_words = []
+                current_seg_start = segment.words[0].start if segment.words else segment.start
 
+                for i, word in enumerate(segment.words):
+                    w_text = word.word.strip()
+                    if not w_text:
+                        continue
+
+                    # Apply global offset (-0.2s) to fix Whisper feeling "late"
+                    global_offset = -0.2
+                    w_start = max(0.0, word.start + global_offset)
+                    w_end = max(0.0, word.end + global_offset)
+
+                    prev_end = current_seg_words[-1]["end"] if current_seg_words else segment.start
+
+                    next_start = None
+                    for j in range(i + 1, len(segment.words)):
+                        if segment.words[j].word.strip():
+                            next_start = segment.words[j].start
+                            break
+
+                    if w_end - w_start < 0.5 and (w_start - prev_end) > 0.5:
+                        w_start = max(prev_end + 0.1, w_start - 3.0)
+
+                    if w_end - w_start < 0.2:
+                        pad_target = w_start + 0.3
+                        if next_start is not None and pad_target > next_start:
+                            w_end = max(w_end, next_start - 0.05)
+                        else:
+                            w_end = max(w_end, pad_target)
+
+                    if next_start is not None and next_start - w_start > 5.0:
+                        if w_end - w_start > 2.0:
+                            w_end = w_start + 2.0
+                    elif next_start is None:
+                        if w_end - w_start > 3.0:
+                            w_end = w_start + 2.0
+
+                    if current_seg_words and (w_start - current_seg_words[-1]["end"] > 4.0):
+                        final_segments.append({
+                            "start": current_seg_start,
+                            "end": current_seg_words[-1]["end"],
+                            "text": " ".join([w["word"] for w in current_seg_words]),
+                            "words": current_seg_words
+                        })
+                        current_seg_words = []
+                        current_seg_start = w_start
+
+                    word_dict = {
+                        "word": w_text,
+                        "start": w_start,
+                        "end": w_end,
+                        "chars": []
+                    }
+
+                    w_dur = w_end - w_start
+                    c_dur = w_dur / len(w_text)
+                    for idx_c, c in enumerate(w_text):
+                        word_dict["chars"].append({
+                            "char": c,
+                            "start": w_start + idx_c * c_dur,
+                            "end": w_start + (idx_c + 1) * c_dur
+                        })
+                    current_seg_words.append(word_dict)
+
+                if current_seg_words:
+                    final_segments.append({
+                        "start": current_seg_start,
+                        "end": current_seg_words[-1]["end"],
+                        "text": " ".join([w["word"] for w in current_seg_words]),
+                        "words": current_seg_words
+                    })
+
+        # Inject instrumental gaps
         segments_with_gaps = []
         last_end = 0.0
         gap_threshold = 5.0
@@ -383,10 +316,11 @@ class AudioProcessor:
             segments_with_gaps.append(seg)
             last_end = seg["end"]
 
+        duration = len(waveform) / 16000
         return {
             "segments": segments_with_gaps,
             "language": "en",
-            "duration": waveform.shape[1] / sample_rate
+            "duration": duration
         }
 
 processor = AudioProcessor()
