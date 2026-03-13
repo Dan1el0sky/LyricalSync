@@ -575,17 +575,17 @@ function App() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between h-full pt-1 relative">
+            <div className="grid grid-cols-3 items-center h-full pt-1 relative">
               {/* Left: Mobile/Compact Info */}
-              <div className="flex items-center gap-4 z-10 w-1/4 sm:w-1/3">
+              <div className="flex items-center gap-4 z-10 justify-start">
                 <img src={currentSong.thumbnail} alt="cover" className="w-12 h-12 rounded-xl object-cover shadow-md border border-white/10 lg:hidden shrink-0" />
                 <div className="flex flex-col min-w-0">
                   <span className="text-xs font-bold text-white/50 w-12 font-mono tracking-wider">{formatTime(currentTime)}</span>
                 </div>
               </div>
 
-              {/* Center: Controls (Absolutely Positioned for Perfect Centering) */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center gap-4 sm:gap-6 z-20">
+              {/* Center: Controls (Centered in Grid) */}
+              <div className="flex items-center justify-center gap-4 sm:gap-6 z-20">
                 <button
                   onClick={skipBackward}
                   className={`transition-colors active:scale-95 ${queueIndex > 0 || currentTime > 3 ? 'text-white hover:text-fuchsia-400' : 'text-white/20 cursor-not-allowed'}`}
@@ -609,7 +609,7 @@ function App() {
               </div>
 
               {/* Right: Volume & Time & Queue Toggle */}
-              <div className="flex justify-end items-center gap-3 sm:gap-4 z-10 w-1/4 sm:w-1/3">
+              <div className="flex justify-end items-center gap-3 sm:gap-4 z-10">
                 <span className="text-xs font-bold text-white/50 font-mono tracking-wider hidden sm:block">{formatTime(duration)}</span>
 
                 <button

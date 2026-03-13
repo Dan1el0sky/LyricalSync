@@ -110,18 +110,16 @@ class LyricsFetcher:
         return None
 
     def get_lyrics(self, title, artist):
-        res = self.fetch_mxm_lyrics(title, artist)
-        if res and res.get("data"):
-            print("Successfully found lyrics from Musixmatch.")
-            return res
-
-        # Genius scraping is blocked by Cloudflare.
-        # Using LRCLIB which provides perfectly synced LRC out of the box for free.
-        print("Musixmatch failed. Falling back to LRCLIB...")
         res = self.fetch_lrclib_lyrics(title, artist)
         if res and res.get("data"):
             print("Successfully found lyrics from LRCLIB.")
             return res
 
-        print("LRCLIB failed. Falling back to complete Whisper transcription...")
+        print("LRCLIB failed. Falling back to Musixmatch...")
+        res = self.fetch_mxm_lyrics(title, artist)
+        if res and res.get("data"):
+            print("Successfully found lyrics from Musixmatch.")
+            return res
+
+        print("Musixmatch failed. Falling back to complete Whisper transcription...")
         return None
