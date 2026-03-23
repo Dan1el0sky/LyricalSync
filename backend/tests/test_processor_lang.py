@@ -31,6 +31,7 @@ class TestAudioProcessorLang(unittest.TestCase):
         class MockModel:
             def __init__(self):
                 self.device = torch.device('cpu')
+                self.last_lang = None
             def align(self, audio, text, language=None, vad=False, fast_mode=False):
                 self.last_lang = language
                 return MockResult()

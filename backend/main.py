@@ -112,7 +112,13 @@ def get_progress(video_id: str):
 
 @app.post("/api/process")
 async def process_song(request: DownloadRequest):
+    import re
     video_id = request.video_id
+
+    # Path traversal / command injection protection
+    if not re.match(r"^[a-zA-Z0-9_-]+$", video_id):
+        raise HTTPException(status_code=400, detail="Invalid video ID")
+
     title = request.title
     artist = request.artist
     url = f"https://music.youtube.com/watch?v={video_id}"
@@ -148,8 +154,8 @@ async def process_song(request: DownloadRequest):
     # 1. Fetch Lyrics (to potentially display source lyrics)
     lyrics = lf.get_lyrics(title, artist)
 
-    # 2. Align via torchaudio MMS FA to get exact character timings
-    # This aligns the official Musixmatch text to the audio without hallucinating wrong words.
+    # 2. Align via Stable Whisper to get exact character/word timings
+    # This aligns the text to the audio without hallucinating wrong words, and handles LRC overriding.
     lyrics_text = ""
     richsync_data = None
 
@@ -163,6 +169,7 @@ async def process_song(request: DownloadRequest):
 
             richsync_data = []
             for line in lyrics["data"].splitlines():
+                # Some LRCLIB lines can have multiple timestamp formats like [00:00.00] or [00:00.000]
                 match = re.search(r'\[(\d{2}):(\d{2}\.\d{2,3})\]', line)
                 if match:
                     minutes = int(match.group(1))
